@@ -80,7 +80,7 @@ app.use(limiter);
 const allowedOrigins = [
     "http://localhost:5173",
     "http://localhost:5174",
-    "https://hello-zore.vercel.app",
+    "https://devzore.com",
 ];
 
 // Add FRONTEND_URL from .env
