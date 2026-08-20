@@ -1,50 +1,307 @@
-import mongoose from 'mongoose';
-import slugify from 'slugify';
+import mongoose from "mongoose";
+import slugify from "slugify";
 
-const postSchema = new mongoose.Schema({
-  title:          { type: String, required: [true, 'Title required'], trim: true, maxlength: 200 },
-  slug:           { type: String, unique: true },
-  excerpt:        { type: String, required: [true, 'Excerpt required'], maxlength: 300 },
-  content:        { type: String, required: [true, 'Content required'] },
-  coverImage:     { type: String, default: '' },
-  coverImageAlt:  { type: String, default: '' },
-  author:         { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  category:       { type: mongoose.Schema.Types.ObjectId, ref: 'Category', required: true },
-  tags:           [{ type: String, trim: true, lowercase: true }],
-  status:         { type: String, enum: ['draft', 'published', 'scheduled'], default: 'draft' },
-  publishedAt:    { type: Date },
-  featured:       { type: Boolean, default: false },
-  readTime:       { type: Number, default: 1 },
-  views:          { type: Number, default: 0 },
-  likes:          { type: Number, default: 0 },
-  seoTitle:       { type: String, maxlength: 70, default: '' },
-  seoDescription: { type: String, maxlength: 160, default: '' },
-  seoKeywords:    { type: String, default: '' },
-  tableOfContents: [{ id: String, text: String, level: Number }],
-}, { timestamps: true });
+// ======================================================
+// POST SCHEMA
+// ======================================================
 
-postSchema.pre('save', function (next) {
-  if (this.isModified('title')) {
-    this.slug = slugify(this.title, { lower: true, strict: true }) + '-' + Date.now();
+const postSchema = new mongoose.Schema(
+  {
+    // --------------------------------------------------
+    // Basic Information
+    // --------------------------------------------------
+
+    title: {
+      type: String,
+      required: [true, "Title required"],
+      trim: true,
+      maxlength: 200,
+    },
+
+    slug: {
+      type: String,
+      unique: true,
+      index: true,
+      trim: true,
+      lowercase: true,
+    },
+
+    excerpt: {
+      type: String,
+      required: [true, "Excerpt required"],
+      trim: true,
+      maxlength: 300,
+    },
+
+    content: {
+      type: String,
+      required: [true, "Content required"],
+    },
+
+    // --------------------------------------------------
+    // Images
+    // --------------------------------------------------
+
+    coverImage: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    coverImageAlt: {
+      type: String,
+      default: "",
+      trim: true,
+      maxlength: 200,
+    },
+
+    // --------------------------------------------------
+    // Author & Category
+    // --------------------------------------------------
+
+    author: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: [true, "Author required"],
+    },
+
+    category: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Category",
+      required: [true, "Category required"],
+    },
+
+    // --------------------------------------------------
+    // Tags
+    // --------------------------------------------------
+
+    tags: [
+      {
+        type: String,
+        trim: true,
+        lowercase: true,
+      },
+    ],
+
+    // --------------------------------------------------
+    // Publishing
+    // --------------------------------------------------
+
+    status: {
+      type: String,
+      enum: ["draft", "published", "scheduled"],
+      default: "draft",
+    },
+
+    publishedAt: {
+      type: Date,
+      default: null,
+    },
+
+    scheduledAt: {
+      type: Date,
+      default: null,
+    },
+
+    featured: {
+      type: Boolean,
+      default: false,
+    },
+
+    // --------------------------------------------------
+    // Statistics
+    // --------------------------------------------------
+
+    readTime: {
+      type: Number,
+      default: 1,
+      min: 1,
+    },
+
+    views: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    likes: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    // --------------------------------------------------
+    // SEO
+    // --------------------------------------------------
+
+    seoTitle: {
+      type: String,
+      maxlength: 70,
+      default: "",
+      trim: true,
+    },
+
+    seoDescription: {
+      type: String,
+      maxlength: 160,
+      default: "",
+      trim: true,
+    },
+
+    seoKeywords: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    // --------------------------------------------------
+    // Table of Contents
+    // --------------------------------------------------
+
+    tableOfContents: [
+      {
+        id: {
+          type: String,
+          trim: true,
+        },
+
+        text: {
+          type: String,
+          trim: true,
+        },
+
+        level: {
+          type: Number,
+          min: 1,
+          max: 6,
+        },
+      },
+    ],
+  },
+  {
+    timestamps: true,
   }
-  if (this.isModified('content')) {
-    const wordCount = this.content.replace(/<[^>]*>/g, '').split(/\s+/).length;
-    this.readTime = Math.max(1, Math.ceil(wordCount / 200));
+);
+
+// ======================================================
+// GENERATE SLUG + READ TIME + PUBLISHED DATE
+// ======================================================
+
+postSchema.pre("save", async function () {
+  // --------------------------------------------------
+  // Generate slug when title changes
+  // --------------------------------------------------
+
+  if (this.isModified("title") || !this.slug) {
+    const baseSlug = slugify(this.title, {
+      lower: true,
+      strict: true,
+      trim: true,
+    });
+
+    this.slug = `${baseSlug}-${Date.now()}`;
   }
-  if (this.isModified('status') && this.status === 'published' && !this.publishedAt) {
+
+  // --------------------------------------------------
+  // Calculate reading time
+  // --------------------------------------------------
+
+  if (this.isModified("content")) {
+    const cleanContent = this.content
+      .replace(/<[^>]*>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    const wordCount = cleanContent
+      ? cleanContent.split(/\s+/).length
+      : 0;
+
+    this.readTime = Math.max(
+      1,
+      Math.ceil(wordCount / 200)
+    );
+  }
+
+  // --------------------------------------------------
+  // Published date
+  // --------------------------------------------------
+
+  if (
+    this.isModified("status") &&
+    this.status === "published" &&
+    !this.publishedAt
+  ) {
     this.publishedAt = new Date();
   }
-  next();
+
+  // --------------------------------------------------
+  // If post becomes draft
+  // --------------------------------------------------
+
+  if (
+    this.isModified("status") &&
+    this.status === "draft"
+  ) {
+    this.publishedAt = null;
+  }
 });
+
+// ======================================================
+// INCREMENT VIEWS
+// ======================================================
 
 postSchema.methods.incrementViews = async function () {
   this.views += 1;
-  return this.save({ validateBeforeSave: false });
-};
-postSchema.index({ status: 1, publishedAt: -1 });
-postSchema.index({ category: 1, status: 1 });
-postSchema.index({ tags: 1 });
-postSchema.index({ featured: 1 });
-postSchema.index({ title: 'text', excerpt: 'text', content: 'text' });
 
-export default mongoose.model('Post', postSchema);
+  return this.save({
+    validateBeforeSave: false,
+  });
+};
+
+// ======================================================
+// INDEXES
+// ======================================================
+
+// Published posts sorted by date
+postSchema.index({
+  status: 1,
+  publishedAt: -1,
+});
+
+// Category filtering
+postSchema.index({
+  category: 1,
+  status: 1,
+});
+
+// Tags filtering
+postSchema.index({
+  tags: 1,
+});
+
+// Featured posts
+postSchema.index({
+  featured: 1,
+  status: 1,
+});
+
+// Text search
+postSchema.index({
+  title: "text",
+  excerpt: "text",
+  content: "text",
+});
+
+// Author posts
+postSchema.index({
+  author: 1,
+  createdAt: -1,
+});
+
+// ======================================================
+// EXPORT MODEL
+// ======================================================
+
+const Post = mongoose.model("Post", postSchema);
+
+export default Post;
