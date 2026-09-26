@@ -7,6 +7,12 @@ import morgan from "morgan";
 import { rateLimit } from "express-rate-limit";
 
 // ======================================================
+// LOAD ENVIRONMENT VARIABLES
+// ======================================================
+
+dotenv.config();
+
+// ======================================================
 // ROUTES
 // ======================================================
 
@@ -15,12 +21,7 @@ import postRoutes from "./routes/posts.js";
 import categoryRoutes from "./routes/categories.js";
 import uploadRoutes from "./routes/upload.js";
 import commentRoutes from "./routes/comments.js";
-
-// ======================================================
-// LOAD ENVIRONMENT VARIABLES
-// ======================================================
-
-dotenv.config();
+import googleDriveRoutes from "./routes/googleDrive.js";
 
 // ======================================================
 // APP CONFIG
@@ -31,10 +32,25 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const MONGODB_URI = process.env.MONGODB_URI;
 
-// Check MongoDB URI
+// ======================================================
+// CHECK REQUIRED ENVIRONMENT VARIABLES
+// ======================================================
+
 if (!MONGODB_URI) {
     console.error("❌ MONGODB_URI is missing in .env");
     process.exit(1);
+}
+
+// Google OAuth variables check
+const googleOAuthConfigured =
+    Boolean(process.env.GOOGLE_CLIENT_ID) &&
+    Boolean(process.env.GOOGLE_CLIENT_SECRET) &&
+    Boolean(process.env.GOOGLE_REDIRECT_URI);
+
+if (!googleOAuthConfigured) {
+    console.warn(
+        "⚠️ Google Drive OAuth environment variables are incomplete."
+    );
 }
 
 // ======================================================
@@ -45,16 +61,19 @@ const limiter = rateLimit({
     // 15 minute window
     windowMs: 15 * 60 * 1000,
 
-    // Allow 500 requests per window (was 100, too strict)
+    // Allow 500 requests per window
     max: 500,
 
-    // Skip rate limiting for admin/auth routes (they're important)
+    // Skip rate limiting for auth/upload routes
     skip: (req) => {
-        return req.path.includes('/auth') || req.path.includes('/upload');
+        return (
+            req.path.includes("/auth") ||
+            req.path.includes("/upload") ||
+            req.path.includes("/google-drive")
+        );
     },
 
     standardHeaders: true,
-
     legacyHeaders: false,
 
     message: {
@@ -100,8 +119,8 @@ if (process.env.ADMIN_URL) {
 app.use(
     cors({
         origin: (origin, callback) => {
-            // Allow requests without an Origin.
-            // Example: Postman or server-to-server requests.
+            // Allow requests without Origin
+            // Example: Postman / server-to-server / OAuth redirect
             if (!origin) {
                 return callback(null, true);
             }
@@ -154,10 +173,10 @@ app.use(
 );
 
 // ======================================================
-// STATIC FILES - SERVE UPLOADS
+// STATIC FILES
 // ======================================================
 
-app.use(express.static('public'));
+app.use(express.static("public"));
 
 // ======================================================
 // API ROUTES
@@ -174,6 +193,19 @@ app.use("/api/upload", uploadRoutes);
 app.use("/api/comments", commentRoutes);
 
 // ======================================================
+// GOOGLE DRIVE OAUTH ROUTES
+// ======================================================
+
+app.use("/api/google-drive", googleDriveRoutes);
+
+// Available Google Drive endpoints:
+//
+// GET /api/google-drive/auth
+// GET /api/google-drive/callback
+//
+// ======================================================
+
+// ======================================================
 // HOME ROUTE
 // ======================================================
 
@@ -183,12 +215,18 @@ app.get("/", (req, res) => {
         message: "DevZore Blog API is running ✅",
         version: "1.0.0",
 
+        googleDriveOAuth: googleOAuthConfigured
+            ? "configured"
+            : "not configured",
+
         endpoints: [
             "/api/auth",
             "/api/posts",
             "/api/categories",
             "/api/upload",
             "/api/comments",
+            "/api/google-drive/auth",
+            "/api/google-drive/callback",
         ],
     });
 });
@@ -201,11 +239,17 @@ app.get("/health", (req, res) => {
     res.status(200).json({
         success: true,
         status: "OK",
+
         timestamp: new Date().toISOString(),
+
         database:
             mongoose.connection.readyState === 1
                 ? "connected"
                 : "disconnected",
+
+        googleDriveOAuth: googleOAuthConfigured
+            ? "configured"
+            : "not configured",
     });
 });
 
@@ -249,6 +293,15 @@ const connectDB = async () => {
         console.log(
             `📦 Database: ${mongoose.connection.name}`
         );
+
+        console.log(
+            `🔐 Google OAuth: ${
+                googleOAuthConfigured
+                    ? "Configured ✅"
+                    : "Not Configured ❌"
+            }`
+        );
+
         console.log("=================================");
 
         // ==================================================
@@ -262,6 +315,10 @@ const connectDB = async () => {
 
             console.log(
                 `❤️ Health check: http://localhost:${PORT}/health`
+            );
+
+            console.log(
+                `🔐 Google Drive Auth: http://localhost:${PORT}/api/google-drive/auth`
             );
         });
     } catch (error) {
