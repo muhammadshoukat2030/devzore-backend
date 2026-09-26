@@ -257,8 +257,7 @@ const uploadImageToGoogleDrive = async (
         file.modifiedTime ||
         null,
 
-      // IMPORTANT:
-      // Frontend response.url ko coverImage mein save karta hai.
+      // Frontend response.url ko coverImage mein save karta hai
       url: imageUrl,
 
       webViewLink,
@@ -268,9 +267,6 @@ const uploadImageToGoogleDrive = async (
   } catch (error) {
     // --------------------------------------------------
     // CLEANUP
-    // --------------------------------------------------
-    // Agar upload ho gaya lekin permission/metadata step fail
-    // hua to orphan Drive file delete karne ki koshish karo.
     // --------------------------------------------------
 
     if (fileId) {
@@ -319,7 +315,7 @@ const deleteImageFromGoogleDrive = async (
       error?.code ||
       error?.response?.status;
 
-    if (status === 404) {
+    if (Number(status) === 404) {
       throw new Error(
         "Google Drive image was not found"
       );
@@ -330,6 +326,169 @@ const deleteImageFromGoogleDrive = async (
     );
   }
 };
+
+// ======================================================
+// GET /api/upload/image/:fileId
+// PUBLIC — SERVE GOOGLE DRIVE IMAGE THROUGH BACKEND
+// ======================================================
+//
+// Google Drive ki actual image ko backend ke through
+// browser/frontend tak stream karta hai.
+//
+// Example:
+// http://localhost:5000/api/upload/image/FILE_ID
+//
+// IMPORTANT:
+// Is route par protect/adminOnly nahi lagana.
+// Blog images public visitors ko bhi show honi chahiye.
+// ======================================================
+
+router.get("/image/:fileId", async (req, res) => {
+  try {
+    const { fileId } = req.params;
+
+    if (!fileId || !fileId.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Google Drive file ID is required.",
+      });
+    }
+
+    const drive = getDriveClient();
+
+    // --------------------------------------------------
+    // 1. Get image metadata
+    // --------------------------------------------------
+
+    const metadataResponse =
+      await drive.files.get({
+        fileId,
+        fields:
+          "id,name,mimeType,size,modifiedTime",
+      });
+
+    const metadata =
+      metadataResponse?.data;
+
+    if (!metadata?.id) {
+      return res.status(404).json({
+        success: false,
+        message: "Image not found.",
+      });
+    }
+
+    // --------------------------------------------------
+    // 2. Security check
+    // --------------------------------------------------
+
+    if (
+      metadata.mimeType &&
+      !metadata.mimeType.startsWith("image/")
+    ) {
+      return res.status(415).json({
+        success: false,
+        message:
+          "Requested Google Drive file is not an image.",
+      });
+    }
+
+    // --------------------------------------------------
+    // 3. Download actual image from Google Drive
+    // --------------------------------------------------
+
+    const imageResponse =
+      await drive.files.get(
+        {
+          fileId,
+          alt: "media",
+        },
+        {
+          responseType: "stream",
+        }
+      );
+
+    // --------------------------------------------------
+    // 4. Response headers
+    // --------------------------------------------------
+
+    res.setHeader(
+      "Content-Type",
+      metadata.mimeType ||
+      "image/webp"
+    );
+
+    if (metadata.size) {
+      res.setHeader(
+        "Content-Length",
+        metadata.size
+      );
+    }
+
+    // Cache for 1 day
+    res.setHeader(
+      "Cache-Control",
+      "public, max-age=86400"
+    );
+
+    // Allow browsers to render directly
+    res.setHeader(
+      "Content-Disposition",
+      "inline"
+    );
+
+    // --------------------------------------------------
+    // 5. Stream Drive image to browser
+    // --------------------------------------------------
+
+    imageResponse.data.on(
+      "error",
+      (streamError) => {
+        console.error(
+          "❌ Google Drive image stream error:",
+          streamError
+        );
+
+        if (!res.headersSent) {
+          return res.status(500).json({
+            success: false,
+            message:
+              "Failed to stream image.",
+          });
+        }
+
+        res.end();
+      }
+    );
+
+    imageResponse.data.pipe(res);
+  } catch (error) {
+    console.error(
+      "❌ Serve Google Drive image error:",
+      error
+    );
+
+    const status =
+      error?.code ||
+      error?.response?.status;
+
+    if (Number(status) === 404) {
+      return res.status(404).json({
+        success: false,
+        message: "Image not found.",
+      });
+    }
+
+    if (!res.headersSent) {
+      return res.status(500).json({
+        success: false,
+        message:
+          "Failed to load image from Google Drive.",
+      });
+    }
+
+    return res.end();
+  }
+});
 
 // ======================================================
 // POST /api/upload/image

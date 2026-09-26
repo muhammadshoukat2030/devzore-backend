@@ -4,6 +4,7 @@ import { body, validationResult } from "express-validator";
 import Post from "../models/Post.js";
 import Category from "../models/Category.js";
 import { protect, adminOnly } from "../middleware/auth.js";
+import { getDriveClient } from "./googleDrive.js";
 
 const router = express.Router();
 
@@ -559,11 +560,15 @@ router.put("/:id", protect, adminOnly, async (req, res) => {
 
 // ======================================================
 // DELETE /api/posts/:id
-// ADMIN — Delete post
+// ADMIN — Delete post + Google Drive cover image
 // ======================================================
 
 router.delete("/:id", protect, adminOnly, async (req, res) => {
   try {
+    // --------------------------------------------------
+    // 1. Find post
+    // --------------------------------------------------
+
     const post = await Post.findById(req.params.id);
 
     if (!post) {
@@ -576,11 +581,83 @@ router.delete("/:id", protect, adminOnly, async (req, res) => {
     const wasPublished =
       post.status === "published";
 
-    const categoryId = post.category;
+    const categoryId =
+      post.category;
+
+    // Google Drive File ID saved with the post
+    const coverImagePublicId =
+      post.coverImagePublicId?.trim() || "";
+
+    // --------------------------------------------------
+    // 2. Delete cover image from Google Drive
+    // --------------------------------------------------
+    //
+    // Old posts may not have coverImagePublicId.
+    // In that case this step will simply be skipped.
+    // --------------------------------------------------
+
+    let driveImageDeleted = false;
+
+    if (coverImagePublicId) {
+      try {
+        const drive = getDriveClient();
+
+        await drive.files.delete({
+          fileId: coverImagePublicId,
+        });
+
+        driveImageDeleted = true;
+
+        console.log(
+          "🗑️ Google Drive cover image deleted:",
+          coverImagePublicId
+        );
+      } catch (driveError) {
+        const driveStatus =
+          driveError?.code ||
+          driveError?.response?.status;
+
+        // If image is already missing from Google Drive,
+        // continue deleting the MongoDB post.
+        if (
+          driveStatus === 404 ||
+          Number(driveStatus) === 404
+        ) {
+          console.warn(
+            "⚠️ Google Drive image already missing:",
+            coverImagePublicId
+          );
+        } else {
+          console.error(
+            "❌ Google Drive image deletion failed:",
+            driveError
+          );
+
+          // Do not delete the post if Drive deletion
+          // failed unexpectedly.
+          return res.status(500).json({
+            success: false,
+            message:
+              "Could not delete cover image from Google Drive. Post was not deleted.",
+          });
+        }
+      }
+    } else {
+      console.log(
+        "ℹ️ No Google Drive File ID stored for this post."
+      );
+    }
+
+    // --------------------------------------------------
+    // 3. Delete post from MongoDB
+    // --------------------------------------------------
 
     await Post.findByIdAndDelete(req.params.id);
 
-    // Decrease category post count
+    // --------------------------------------------------
+    // 4. Decrease category post count
+    // --------------------------------------------------
+
     if (wasPublished && categoryId) {
       await Category.findByIdAndUpdate(
         categoryId,
@@ -592,16 +669,28 @@ router.delete("/:id", protect, adminOnly, async (req, res) => {
       );
     }
 
-    res.json({
+    // --------------------------------------------------
+    // 5. Success
+    // --------------------------------------------------
+
+    return res.status(200).json({
       success: true,
       message: "Post deleted successfully.",
+      driveImageDeleted,
+      deletedImagePublicId:
+        coverImagePublicId || null,
     });
   } catch (err) {
-    console.error("Delete post error:", err);
+    console.error(
+      "❌ Delete post error:",
+      err
+    );
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      message: err.message || "Failed to delete post.",
+      message:
+        err.message ||
+        "Failed to delete post.",
     });
   }
 });

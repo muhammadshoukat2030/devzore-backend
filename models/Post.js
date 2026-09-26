@@ -7,9 +7,9 @@ import slugify from "slugify";
 
 const postSchema = new mongoose.Schema(
   {
-    // --------------------------------------------------
-    // Basic Information
-    // --------------------------------------------------
+    // ==================================================
+    // BASIC INFORMATION
+    // ==================================================
 
     title: {
       type: String,
@@ -38,11 +38,20 @@ const postSchema = new mongoose.Schema(
       required: [true, "Content required"],
     },
 
-    // --------------------------------------------------
-    // Images
-    // --------------------------------------------------
+    // ==================================================
+    // COVER IMAGE
+    // ==================================================
 
+    // Public/renderable image URL
     coverImage: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    // Google Drive File ID.
+    // Used when deleting/replacing the image in Drive.
+    coverImagePublicId: {
       type: String,
       default: "",
       trim: true,
@@ -55,9 +64,9 @@ const postSchema = new mongoose.Schema(
       maxlength: 200,
     },
 
-    // --------------------------------------------------
-    // Author & Category
-    // --------------------------------------------------
+    // ==================================================
+    // AUTHOR & CATEGORY
+    // ==================================================
 
     author: {
       type: mongoose.Schema.Types.ObjectId,
@@ -71,9 +80,9 @@ const postSchema = new mongoose.Schema(
       required: [true, "Category required"],
     },
 
-    // --------------------------------------------------
-    // Tags
-    // --------------------------------------------------
+    // ==================================================
+    // TAGS
+    // ==================================================
 
     tags: [
       {
@@ -83,9 +92,9 @@ const postSchema = new mongoose.Schema(
       },
     ],
 
-    // --------------------------------------------------
-    // Publishing
-    // --------------------------------------------------
+    // ==================================================
+    // PUBLISHING
+    // ==================================================
 
     status: {
       type: String,
@@ -108,9 +117,9 @@ const postSchema = new mongoose.Schema(
       default: false,
     },
 
-    // --------------------------------------------------
-    // Statistics
-    // --------------------------------------------------
+    // ==================================================
+    // STATISTICS
+    // ==================================================
 
     readTime: {
       type: Number,
@@ -130,9 +139,9 @@ const postSchema = new mongoose.Schema(
       min: 0,
     },
 
-    // --------------------------------------------------
+    // ==================================================
     // SEO
-    // --------------------------------------------------
+    // ==================================================
 
     seoTitle: {
       type: String,
@@ -154,9 +163,9 @@ const postSchema = new mongoose.Schema(
       trim: true,
     },
 
-    // --------------------------------------------------
-    // Table of Contents
-    // --------------------------------------------------
+    // ==================================================
+    // TABLE OF CONTENTS
+    // ==================================================
 
     tableOfContents: [
       {
@@ -184,7 +193,8 @@ const postSchema = new mongoose.Schema(
 );
 
 // ======================================================
-// GENERATE SLUG + READ TIME + PUBLISHED DATE
+// PRE-SAVE
+// Generate slug + read time + published date
 // ======================================================
 
 postSchema.pre("save", async function () {
@@ -223,7 +233,7 @@ postSchema.pre("save", async function () {
   }
 
   // --------------------------------------------------
-  // Published date
+  // Set published date
   // --------------------------------------------------
 
   if (
@@ -235,7 +245,7 @@ postSchema.pre("save", async function () {
   }
 
   // --------------------------------------------------
-  // If post becomes draft
+  // Clear published date if changed to draft
   // --------------------------------------------------
 
   if (
@@ -285,7 +295,7 @@ postSchema.index({
   status: 1,
 });
 
-// Text search
+// Full-text search
 postSchema.index({
   title: "text",
   excerpt: "text",
@@ -302,6 +312,9 @@ postSchema.index({
 // EXPORT MODEL
 // ======================================================
 
-const Post = mongoose.model("Post", postSchema);
+const Post = mongoose.model(
+  "Post",
+  postSchema
+);
 
 export default Post;
