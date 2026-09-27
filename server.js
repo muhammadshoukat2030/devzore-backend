@@ -22,6 +22,7 @@ import categoryRoutes from "./routes/categories.js";
 import uploadRoutes from "./routes/upload.js";
 import commentRoutes from "./routes/comments.js";
 import googleDriveRoutes from "./routes/googleDrive.js";
+import sitemapRoutes from "./routes/sitemap.js";
 
 // ======================================================
 // APP CONFIG
@@ -185,6 +186,9 @@ app.use(express.static("public"));
 app.use("/api/auth", authRoutes);
 
 app.use("/api/posts", postRoutes);
+
+// Dynamic blog sitemap
+app.use("/api/sitemap", sitemapRoutes);
 
 app.use("/api/categories", categoryRoutes);
 
