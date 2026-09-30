@@ -286,12 +286,15 @@ router.get("/admin/:id", protect, adminOnly, async (req, res) => {
 
 router.get("/:slug", async (req, res) => {
   try {
+    const postQueryStart = Date.now();
+    const routeStart = Date.now();
     const post = await Post.findOne({
       slug: req.params.slug,
       status: "published",
     })
       .populate("author", "name avatar bio")
       .populate("category", "name slug color");
+    console.log("BLOG TIMING - main post:", Date.now() - postQueryStart, "ms");
 
     if (!post) {
       return res.status(404).json({
@@ -308,6 +311,7 @@ router.get("/:slug", async (req, res) => {
       console.error("Increment views error:", err);
     });
 
+    const relatedQueryStart = Date.now();
     // Related posts
     const related = await Post.find({
       status: "published",
@@ -319,6 +323,8 @@ router.get("/:slug", async (req, res) => {
       .select("-content -tableOfContents")
       .sort("-publishedAt")
       .limit(3);
+    console.log("BLOG TIMING - related:", Date.now() - relatedQueryStart, "ms");
+    console.log("BLOG TIMING - total:", Date.now() - routeStart, "ms");
 
     res.json({
       success: true,
