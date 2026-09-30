@@ -300,8 +300,13 @@ router.get("/:slug", async (req, res) => {
       });
     }
 
-    // Increment views ONLY ONCE
-    await post.incrementViews();
+    // Increment views without blocking article response
+    Post.updateOne(
+      { _id: post._id },
+      { $inc: { views: 1 } }
+    ).catch((err) => {
+      console.error("Increment views error:", err);
+    });
 
     // Related posts
     const related = await Post.find({
