@@ -130,9 +130,7 @@ const compressImage = async (buffer) => {
 // sz=w1600 image ko large blog cover ke liye request karta hai.
 
 const createGoogleDriveImageUrl = (fileId) => {
-  return `https://drive.google.com/thumbnail?id=${encodeURIComponent(
-    fileId
-  )}&sz=w1600`;
+  return `https://drive.google.com/uc?export=view&id=${encodeURIComponent(fileId)}`;
 };
 
 // Original Google Drive viewing page.
@@ -436,6 +434,17 @@ router.get("/image/:fileId", async (req, res) => {
       "inline"
     );
 
+    // Allow this public image to render from frontend/domain
+    res.setHeader(
+      "Cross-Origin-Resource-Policy",
+      "cross-origin"
+    );
+
+    res.setHeader(
+      "Access-Control-Allow-Origin",
+      "*"
+    );
+
     // --------------------------------------------------
     // 5. Stream Drive image to browser
     // --------------------------------------------------
@@ -603,7 +612,7 @@ router.post(
         success: true,
 
         // Actual browser-renderable image URL
-        url: driveFile.url,
+        url: (req.get("x-forwarded-proto") || req.protocol) + "://" + req.get("host") + "/api/upload/image/" + encodeURIComponent(driveFile.fileId),
 
         // Google Drive File ID
         // Delete endpoint ke liye.

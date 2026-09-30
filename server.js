@@ -24,6 +24,9 @@ import commentRoutes from "./routes/comments.js";
 import googleDriveRoutes from "./routes/googleDrive.js";
 import sitemapRoutes from "./routes/sitemap.js";
 
+// Scheduled post publisher
+import { startScheduledPostPublisher } from "./services/scheduledPostService.js";
+
 // ======================================================
 // APP CONFIG
 // ======================================================
@@ -307,6 +310,12 @@ const connectDB = async () => {
         );
 
         console.log("=================================");
+
+        // ==================================================
+        // START SCHEDULED POST PUBLISHER
+        // ==================================================
+
+        startScheduledPostPublisher();
 
         // ==================================================
         // START SERVER
