@@ -192,8 +192,9 @@ router.get("/admin/all", protect, adminOnly, async (req, res) => {
   try {
     const {
       status,
+      search,
       page = 1,
-      limit = 20,
+      limit = 10,
     } = req.query;
 
     const {
@@ -203,9 +204,17 @@ router.get("/admin/all", protect, adminOnly, async (req, res) => {
     } = getPagination(page, limit);
 
     const filter = {};
-
     if (status) {
       filter.status = status;
+    }
+
+    if (search && search.trim()) {
+      const safeSearch = search.trim().replace(/[^a-zA-Z0-9 _-]/g, "");
+
+      filter.$or = [
+        { title: { $regex: safeSearch, $options: "i" } },
+        { slug: { $regex: safeSearch, $options: "i" } },
+      ];
     }
 
     const total = await Post.countDocuments(filter);
