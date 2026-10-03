@@ -20,20 +20,31 @@ const escapeXml = (value = "") => {
 
 // ======================================================
 // STATIC WEBSITE ROUTES
-// These routes always remain in the sitemap.
 // ======================================================
 
+// ------------------------------------------------------
+// MAIN / COMPANY / RESOURCE PAGES
+// ------------------------------------------------------
+
+// MAIN / COMPANY / RESOURCES
 const mainPages = [
   "/",
   "/about",
   "/contact",
   "/blog",
   "/allservices",
+  "/our-process",
+  "/technologies",
+  "/resources",
+  "/development-guides",
+  "/faq",
 ];
 
+// SERVICES
 const servicePages = [
   "/web-development",
   "/mobile-apps",
+  "/generative-ai-development",
   "/ecommerce",
   "/backend-api",
   "/mern-stack-development",
@@ -46,6 +57,17 @@ const servicePages = [
   "/digital-marketing",
 ];
 
+// SOLUTIONS
+const solutionPages = [
+  "/startup-solutions",
+  "/business-solutions",
+  "/ecommerce-solutions",
+  "/saas-solutions",
+  "/management-systems",
+  "/custom-software-solutions",
+];
+
+// LEGAL
 const legalPages = [
   "/privacy-policy",
   "/terms-and-conditions",
@@ -75,11 +97,14 @@ const generateStaticUrl = (
 // ======================================================
 // GENERATE COMPLETE SITEMAP
 //
-// Static pages
-// +
-// Published blog posts from MongoDB
-// +
-// Legal pages
+// Includes:
+// - Main pages
+// - Company pages
+// - Resource pages
+// - Service pages
+// - Solution pages
+// - Published blog posts from MongoDB
+// - Legal pages
 // ======================================================
 
 const generateSitemap = async (req, res) => {
@@ -103,7 +128,7 @@ const generateSitemap = async (req, res) => {
       .lean();
 
     // ==================================================
-    // MAIN PAGES
+    // MAIN / COMPANY / RESOURCE PAGES
     // ==================================================
 
     const mainUrls = mainPages
@@ -126,6 +151,43 @@ const generateSitemap = async (req, res) => {
           );
         }
 
+        // Main services listing
+        if (path === "/allservices") {
+          return generateStaticUrl(
+            path,
+            "monthly",
+            "0.9"
+          );
+        }
+
+        // Resources hub
+        if (path === "/resources") {
+          return generateStaticUrl(
+            path,
+            "weekly",
+            "0.8"
+          );
+        }
+
+        // Development guides
+        if (path === "/development-guides") {
+          return generateStaticUrl(
+            path,
+            "weekly",
+            "0.8"
+          );
+        }
+
+        // FAQ
+        if (path === "/faq") {
+          return generateStaticUrl(
+            path,
+            "monthly",
+            "0.8"
+          );
+        }
+
+        // Remaining main/company pages
         return generateStaticUrl(
           path,
           "monthly",
@@ -149,10 +211,24 @@ const generateSitemap = async (req, res) => {
       .join("\n");
 
     // ==================================================
+    // SOLUTION PAGES
+    // ==================================================
+
+    const solutionUrls = solutionPages
+      .map((path) =>
+        generateStaticUrl(
+          path,
+          "monthly",
+          "0.9"
+        )
+      )
+      .join("\n");
+
+    // ==================================================
     // DYNAMIC BLOG POSTS
     //
     // Every published MongoDB post automatically
-    // appears here.
+    // appears in the sitemap.
     // ==================================================
 
     const blogUrls = posts
@@ -202,7 +278,7 @@ const generateSitemap = async (req, res) => {
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
 
   <!-- =========================
-       MAIN PAGES
+       MAIN / COMPANY / RESOURCES
   ========================== -->
 
 ${mainUrls}
@@ -212,6 +288,12 @@ ${mainUrls}
   ========================== -->
 
 ${serviceUrls}
+
+  <!-- =========================
+       SOLUTIONS
+  ========================== -->
+
+${solutionUrls}
 
   <!-- =========================
        BLOG POSTS
