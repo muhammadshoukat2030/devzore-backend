@@ -3,514 +3,909 @@ import { google } from "googleapis";
 
 const router = express.Router();
 
-// ======================================================
-// GOOGLE DRIVE OAUTH CONFIGURATION
-// ======================================================
-
 const DRIVE_SCOPE = [
-    "https://www.googleapis.com/auth/drive.file",
+  "https://www.googleapis.com/auth/drive.file",
 ];
 
-// ======================================================
-// GOOGLE OAUTH CLIENT
-// ======================================================
+let cachedOAuthClient = null;
+let cachedRefreshToken = null;
 
-const getOAuthClient = () => {
-    const {
-        GOOGLE_CLIENT_ID,
-        GOOGLE_CLIENT_SECRET,
-        GOOGLE_REDIRECT_URI,
-        GOOGLE_REFRESH_TOKEN,
-    } = process.env;
+// ENV HELPERS
 
-    // --------------------------------------------------
-    // Validate required Google OAuth variables
-    // --------------------------------------------------
+const getEnvValue = (name) => {
+  return String(process.env[name] || "").trim();
+};
 
-    if (!GOOGLE_CLIENT_ID) {
-        throw new Error("GOOGLE_CLIENT_ID is missing");
-    }
+const requireEnvValue = (name) => {
+  const value = getEnvValue(name);
 
-    if (!GOOGLE_CLIENT_SECRET) {
-        throw new Error("GOOGLE_CLIENT_SECRET is missing");
-    }
+  if (!value) {
+    throw new Error(`${name} is missing`);
+  }
 
-    if (!GOOGLE_REDIRECT_URI) {
-        throw new Error("GOOGLE_REDIRECT_URI is missing");
-    }
+  return value;
+};
 
-    // --------------------------------------------------
-    // Create OAuth2 client
-    // --------------------------------------------------
+// GOOGLE ERROR HELPERS
 
-    const oauth2Client = new google.auth.OAuth2(
-        GOOGLE_CLIENT_ID,
-        GOOGLE_CLIENT_SECRET,
-        GOOGLE_REDIRECT_URI
+const getGoogleErrorMessage = (error) => {
+  const responseData = error?.response?.data;
+
+  if (
+    typeof responseData?.error_description === "string"
+  ) {
+    return responseData.error_description;
+  }
+
+  if (
+    typeof responseData?.error?.message === "string"
+  ) {
+    return responseData.error.message;
+  }
+
+  if (typeof responseData?.error === "string") {
+    return responseData.error;
+  }
+
+  return (
+    error?.message ||
+    "Unknown Google Drive error"
+  );
+};
+
+const isInvalidGrantError = (error) => {
+  const message =
+    getGoogleErrorMessage(error).toLowerCase();
+
+  return (
+    message.includes("invalid_grant") ||
+    message.includes("expired or revoked") ||
+    message.includes("token has been expired") ||
+    message.includes("token has been revoked")
+  );
+};
+
+const createGoogleAuthError = (error) => {
+  const message =
+    getGoogleErrorMessage(error);
+
+  if (isInvalidGrantError(error)) {
+    const authError = new Error(
+      "Google Drive refresh token is invalid, expired or revoked. Re-authorize Google Drive and replace GOOGLE_REFRESH_TOKEN."
     );
 
-    // --------------------------------------------------
-    // Attach permanent refresh token
-    //
-    // Once GOOGLE_REFRESH_TOKEN is stored in .env/Vercel,
-    // Google can automatically obtain new access tokens.
-    // --------------------------------------------------
+    authError.code =
+      "GOOGLE_DRIVE_AUTH_REQUIRED";
 
-    if (GOOGLE_REFRESH_TOKEN) {
-        oauth2Client.setCredentials({
-            refresh_token: GOOGLE_REFRESH_TOKEN,
-        });
-    }
+    authError.originalMessage =
+      message;
 
-    return oauth2Client;
+    return authError;
+  }
+
+  const driveError = new Error(message);
+
+  driveError.code =
+    "GOOGLE_DRIVE_ERROR";
+
+  return driveError;
 };
 
-// ======================================================
-// GOOGLE DRIVE CLIENT
-// ======================================================
+// CREATE OAUTH CLIENT
+
+const createOAuthClient = () => {
+  const clientId =
+    requireEnvValue(
+      "GOOGLE_CLIENT_ID"
+    );
+
+  const clientSecret =
+    requireEnvValue(
+      "GOOGLE_CLIENT_SECRET"
+    );
+
+  const redirectUri =
+    requireEnvValue(
+      "GOOGLE_REDIRECT_URI"
+    );
+
+  const oauth2Client =
+    new google.auth.OAuth2(
+      clientId,
+      clientSecret,
+      redirectUri
+    );
+
+  oauth2Client.on(
+    "tokens",
+    (tokens) => {
+      if (tokens.access_token) {
+        console.log(
+          "🔄 Google access token refreshed automatically"
+        );
+      }
+
+      if (tokens.refresh_token) {
+        console.log(
+          "⚠️ Google issued a new refresh token."
+        );
+
+        console.log(
+          "⚠️ Replace GOOGLE_REFRESH_TOKEN in your secure environment."
+        );
+      }
+    }
+  );
+
+  return oauth2Client;
+};
+
+// GET OAUTH CLIENT
+
+const getOAuthClient = ({
+  attachRefreshToken = true,
+  forceNew = false,
+} = {}) => {
+  if (forceNew || !cachedOAuthClient) {
+    cachedOAuthClient =
+      createOAuthClient();
+
+    cachedRefreshToken = null;
+  }
+
+  if (attachRefreshToken) {
+    const refreshToken =
+      getEnvValue(
+        "GOOGLE_REFRESH_TOKEN"
+      );
+
+    if (refreshToken) {
+      if (
+        cachedRefreshToken !==
+        refreshToken
+      ) {
+        cachedOAuthClient.setCredentials({
+          ...cachedOAuthClient.credentials,
+          refresh_token:
+            refreshToken,
+        });
+
+        cachedRefreshToken =
+          refreshToken;
+      }
+    }
+  }
+
+  return cachedOAuthClient;
+};
+
+// CALLBACK CLIENT
+//
+// OAuth callback ke liye separate client.
+// Existing cached Drive client disturb nahi hoga.
+
+const createCallbackOAuthClient = () => {
+  return createOAuthClient();
+};
+
+// DRIVE CLIENT
 
 const getDriveClient = () => {
-    if (!process.env.GOOGLE_REFRESH_TOKEN) {
-        throw new Error(
-            "GOOGLE_REFRESH_TOKEN is missing. Complete Google Drive OAuth setup first."
-        );
-    }
+  const refreshToken =
+    getEnvValue(
+      "GOOGLE_REFRESH_TOKEN"
+    );
 
-    const oauth2Client = getOAuthClient();
+  if (!refreshToken) {
+    const error = new Error(
+      "GOOGLE_REFRESH_TOKEN is missing. Complete Google Drive OAuth setup first."
+    );
 
-    return google.drive({
-        version: "v3",
-        auth: oauth2Client,
+    error.code =
+      "GOOGLE_DRIVE_AUTH_REQUIRED";
+
+    throw error;
+  }
+
+  const oauth2Client =
+    getOAuthClient({
+      attachRefreshToken: true,
     });
+
+  return google.drive({
+    version: "v3",
+    auth: oauth2Client,
+  });
 };
 
-// ======================================================
-// GOOGLE DRIVE STATUS
-//
-// GET /api/google-drive/status
-// ======================================================
+// TEST ACCESS TOKEN
 
-router.get("/status", (req, res) => {
-    try {
-        const clientIdConfigured = Boolean(
-            process.env.GOOGLE_CLIENT_ID
-        );
+const verifyGoogleAccess = async () => {
+  try {
+    const oauth2Client =
+      getOAuthClient({
+        attachRefreshToken: true,
+      });
 
-        const clientSecretConfigured = Boolean(
-            process.env.GOOGLE_CLIENT_SECRET
-        );
+    const refreshToken =
+      getEnvValue(
+        "GOOGLE_REFRESH_TOKEN"
+      );
 
-        const redirectUriConfigured = Boolean(
-            process.env.GOOGLE_REDIRECT_URI
-        );
+    if (!refreshToken) {
+      const error = new Error(
+        "GOOGLE_REFRESH_TOKEN is missing."
+      );
 
-        const refreshTokenConfigured = Boolean(
-            process.env.GOOGLE_REFRESH_TOKEN
-        );
+      error.code =
+        "GOOGLE_DRIVE_AUTH_REQUIRED";
 
-        const oauthConfigured =
-            clientIdConfigured &&
-            clientSecretConfigured &&
-            redirectUriConfigured;
-
-        const fullyConfigured =
-            oauthConfigured &&
-            refreshTokenConfigured;
-
-        return res.status(200).json({
-            success: true,
-
-            configured: oauthConfigured,
-
-            refreshTokenConfigured,
-
-            fullyConfigured,
-
-            message: fullyConfigured
-                ? "Google Drive is fully configured ✅"
-                : oauthConfigured
-                ? "Google OAuth configured, but refresh token is missing."
-                : "Google Drive configuration is incomplete.",
-        });
-    } catch (error) {
-        console.error(
-            "❌ Google Drive Status Error:",
-            error.message
-        );
-
-        return res.status(500).json({
-            success: false,
-            message: "Unable to check Google Drive status",
-            error:
-                process.env.NODE_ENV === "development"
-                    ? error.message
-                    : undefined,
-        });
+      throw error;
     }
-});
 
-// ======================================================
-// START GOOGLE AUTHENTICATION
-//
-// GET /api/google-drive/auth
-// ======================================================
+    // Google library refresh token use karke
+    // access token automatically generate/refresh karegi.
+    const result =
+      await oauth2Client.getAccessToken();
 
-router.get("/auth", (req, res) => {
+    const accessToken =
+      typeof result === "string"
+        ? result
+        : result?.token;
+
+    if (!accessToken) {
+      throw new Error(
+        "Google did not return an access token."
+      );
+    }
+
+    return true;
+  } catch (error) {
+    throw createGoogleAuthError(
+      error
+    );
+  }
+};
+
+// DRIVE CONNECTION TEST
+
+const verifyGoogleDriveConnection =
+  async () => {
     try {
-        const oauth2Client = getOAuthClient();
+      await verifyGoogleAccess();
 
-        const authUrl = oauth2Client.generateAuthUrl({
-            // Required if we want a refresh token
-            access_type: "offline",
+      const drive =
+        getDriveClient();
 
-            // Forces consent screen so Google can issue
-            // a refresh token during setup
-            prompt: "consent",
-
-            scope: DRIVE_SCOPE,
-
-            include_granted_scopes: true,
+      const response =
+        await drive.about.get({
+          fields:
+            "user(displayName,emailAddress)",
         });
 
-        return res.redirect(authUrl);
+      return {
+        connected: true,
+
+        user: {
+          displayName:
+            response.data.user
+              ?.displayName ||
+            null,
+
+          emailAddress:
+            response.data.user
+              ?.emailAddress ||
+            null,
+        },
+      };
     } catch (error) {
-        console.error(
-            "❌ Google Auth Error:",
-            error.message
+      if (
+        error?.code ===
+        "GOOGLE_DRIVE_AUTH_REQUIRED"
+      ) {
+        throw error;
+      }
+
+      throw createGoogleAuthError(
+        error
+      );
+    }
+  };
+
+// STATUS
+
+router.get(
+  "/status",
+  async (req, res) => {
+    try {
+      const clientIdConfigured =
+        Boolean(
+          getEnvValue(
+            "GOOGLE_CLIENT_ID"
+          )
         );
 
-        return res.status(500).json({
-            success: false,
-            message:
-                "Failed to start Google authentication",
-            error:
-                process.env.NODE_ENV === "development"
-                    ? error.message
-                    : undefined,
-        });
+      const clientSecretConfigured =
+        Boolean(
+          getEnvValue(
+            "GOOGLE_CLIENT_SECRET"
+          )
+        );
+
+      const redirectUriConfigured =
+        Boolean(
+          getEnvValue(
+            "GOOGLE_REDIRECT_URI"
+          )
+        );
+
+      const refreshTokenConfigured =
+        Boolean(
+          getEnvValue(
+            "GOOGLE_REFRESH_TOKEN"
+          )
+        );
+
+      const oauthConfigured =
+        clientIdConfigured &&
+        clientSecretConfigured &&
+        redirectUriConfigured;
+
+      const fullyConfigured =
+        oauthConfigured &&
+        refreshTokenConfigured;
+
+      return res.status(200).json({
+        success: true,
+
+        configured:
+          oauthConfigured,
+
+        refreshTokenConfigured,
+
+        fullyConfigured,
+
+        message: fullyConfigured
+          ? "Google Drive configuration is complete."
+          : oauthConfigured
+            ? "Google OAuth is configured, but GOOGLE_REFRESH_TOKEN is missing."
+            : "Google Drive OAuth configuration is incomplete.",
+      });
+    } catch (error) {
+      console.error(
+        "❌ Google Drive Status Error:",
+        error.message
+      );
+
+      return res.status(500).json({
+        success: false,
+
+        message:
+          "Unable to check Google Drive configuration.",
+      });
     }
-});
+  }
+);
 
-// ======================================================
-// GOOGLE OAUTH CALLBACK
-//
-// GET /api/google-drive/callback
-// ======================================================
+// START AUTH
 
-router.get("/callback", async (req, res) => {
+router.get(
+  "/auth",
+  (req, res) => {
     try {
-        const {
-            code,
-            error: googleError,
-        } = req.query;
+      const oauth2Client =
+        createCallbackOAuthClient();
 
-        // --------------------------------------------------
-        // User denied/cancelled Google permission
-        // --------------------------------------------------
+      const authUrl =
+        oauth2Client.generateAuthUrl({
+          access_type: "offline",
 
-        if (googleError) {
-            return res.status(400).json({
-                success: false,
-                message:
-                    "Google authorization was denied",
-                error: googleError,
-            });
-        }
+          prompt: "consent",
 
-        // --------------------------------------------------
-        // Authorization code is required
-        // --------------------------------------------------
+          scope: DRIVE_SCOPE,
 
-        if (!code) {
-            return res.status(400).json({
-                success: false,
-                message:
-                    "Google authorization code is missing",
-            });
-        }
+          include_granted_scopes:
+            true,
+        });
 
-        const oauth2Client = getOAuthClient();
+      return res.redirect(
+        authUrl
+      );
+    } catch (error) {
+      console.error(
+        "❌ Google Auth Error:",
+        error.message
+      );
 
-        // --------------------------------------------------
-        // Exchange authorization code for tokens
-        // --------------------------------------------------
+      return res.status(500).json({
+        success: false,
 
-        const { tokens } =
-            await oauth2Client.getToken(code);
+        message:
+          "Failed to start Google Drive authentication.",
 
-        oauth2Client.setCredentials(tokens);
+        error:
+          process.env.NODE_ENV ===
+          "development"
+            ? error.message
+            : undefined,
+      });
+    }
+  }
+);
 
-        const accessTokenReceived =
-            Boolean(tokens.access_token);
+// OAUTH CALLBACK
 
-        const refreshTokenReceived =
-            Boolean(tokens.refresh_token);
+router.get(
+  "/callback",
+  async (req, res) => {
+    try {
+      const {
+        code,
+        error: googleError,
+      } = req.query;
 
-        // ==================================================
-        // ONE-TIME LOCAL REFRESH TOKEN DISPLAY
-        // ==================================================
-        //
-        // SECURITY:
-        //
-        // This is ONLY intended for initial local setup.
-        //
-        // .env:
-        //
-        // NODE_ENV=development
-        // SHOW_GOOGLE_REFRESH_TOKEN_ONCE=true
-        //
-        // After OAuth succeeds, the refresh token will
-        // appear ONCE in your local terminal.
-        //
-        // Copy:
-        //
-        // GOOGLE_REFRESH_TOKEN=xxxxxxxx
-        //
-        // into your local .env and later into Vercel
-        // Environment Variables.
-        //
-        // Then DELETE:
-        //
-        // SHOW_GOOGLE_REFRESH_TOKEN_ONCE=true
-        //
-        // NEVER:
-        // - commit the refresh token to GitHub
-        // - send it in chat
-        // - put it in frontend code
-        // - expose it in browser JSON
-        // ==================================================
+      if (googleError) {
+        return res.status(400).json({
+          success: false,
 
-        if (
-            process.env.NODE_ENV === "development" &&
-            process.env.SHOW_GOOGLE_REFRESH_TOKEN_ONCE ===
-                "true" &&
-            tokens.refresh_token
-        ) {
-            console.log("");
-            console.log(
-                "======================================================"
-            );
-            console.log(
-                "⚠️ GOOGLE REFRESH TOKEN - LOCAL SETUP ONLY"
-            );
-            console.log(
-                "======================================================"
-            );
+          message:
+            "Google authorization was denied.",
 
-            console.log(
-                `GOOGLE_REFRESH_TOKEN=${tokens.refresh_token}`
-            );
+          error:
+            googleError,
+        });
+      }
 
-            console.log(
-                "======================================================"
-            );
-            console.log(
-                "⚠️ Copy this into .env immediately."
-            );
-            console.log(
-                "⚠️ Then remove SHOW_GOOGLE_REFRESH_TOKEN_ONCE."
-            );
-            console.log(
-                "⚠️ NEVER push this token to GitHub."
-            );
-            console.log(
-                "======================================================"
-            );
-            console.log("");
-        }
+      if (!code) {
+        return res.status(400).json({
+          success: false,
 
-        // --------------------------------------------------
-        // Safe logs
-        //
-        // We only log whether tokens were received.
-        // --------------------------------------------------
+          message:
+            "Google authorization code is missing.",
+        });
+      }
 
+      const oauth2Client =
+        createCallbackOAuthClient();
+
+      const { tokens } =
+        await oauth2Client.getToken(
+          code
+        );
+
+      if (!tokens) {
+        throw new Error(
+          "Google did not return OAuth tokens."
+        );
+      }
+
+      oauth2Client.setCredentials(
+        tokens
+      );
+
+      const accessTokenReceived =
+        Boolean(
+          tokens.access_token
+        );
+
+      const refreshTokenReceived =
+        Boolean(
+          tokens.refresh_token
+        );
+
+      // Verify newly authorized account immediately.
+      const callbackDrive =
+        google.drive({
+          version: "v3",
+          auth: oauth2Client,
+        });
+
+      let connectedEmail = null;
+
+      try {
+        const aboutResponse =
+          await callbackDrive.about.get({
+            fields:
+              "user(displayName,emailAddress)",
+          });
+
+        connectedEmail =
+          aboutResponse.data.user
+            ?.emailAddress ||
+          null;
+      } catch (verifyError) {
+        console.error(
+          "⚠️ OAuth succeeded but Drive verification failed:",
+          getGoogleErrorMessage(
+            verifyError
+          )
+        );
+      }
+
+      // LOCAL ONLY:
+      // temporarily apply new token to current Node process.
+      //
+      // .env mein phir bhi manually save karna hoga.
+      if (
+        process.env.NODE_ENV ===
+          "development" &&
+        tokens.refresh_token
+      ) {
+        process.env.GOOGLE_REFRESH_TOKEN =
+          tokens.refresh_token;
+
+        cachedOAuthClient = null;
+        cachedRefreshToken = null;
+
+        console.log(
+          "✅ New Google refresh token applied to current local process."
+        );
+      }
+
+      // Optional one-time local terminal display.
+      if (
+        process.env.NODE_ENV ===
+          "development" &&
+        getEnvValue(
+          "SHOW_GOOGLE_REFRESH_TOKEN_ONCE"
+        ) === "true" &&
+        tokens.refresh_token
+      ) {
         console.log("");
         console.log(
-            "================================="
+          "=============================================="
         );
         console.log(
-            "✅ GOOGLE DRIVE CONNECTED"
+          "⚠️ GOOGLE REFRESH TOKEN - LOCAL SETUP ONLY"
         );
         console.log(
-            "Access Token Received:",
-            accessTokenReceived
+          "=============================================="
+        );
+
+        console.log(
+          `GOOGLE_REFRESH_TOKEN=${tokens.refresh_token}`
+        );
+
+        console.log(
+          "=============================================="
         );
         console.log(
-            "Refresh Token Received:",
-            refreshTokenReceived
+          "Copy it into backend .env."
         );
         console.log(
-            "================================="
+          "Then remove SHOW_GOOGLE_REFRESH_TOKEN_ONCE=true."
+        );
+        console.log(
+          "Never commit this token to GitHub."
+        );
+        console.log(
+          "=============================================="
         );
         console.log("");
+      }
 
-        // --------------------------------------------------
-        // IMPORTANT:
-        // Actual tokens are NEVER returned to browser.
-        // --------------------------------------------------
+      console.log("");
+      console.log(
+        "================================="
+      );
+      console.log(
+        "✅ GOOGLE DRIVE CONNECTED"
+      );
+      console.log(
+        "Access Token Received:",
+        accessTokenReceived
+      );
+      console.log(
+        "Refresh Token Received:",
+        refreshTokenReceived
+      );
 
-        return res.status(200).json({
-            success: true,
+      if (connectedEmail) {
+        console.log(
+          "Connected Account:",
+          connectedEmail
+        );
+      }
 
-            message:
-                "Google Drive connected successfully ✅",
+      console.log(
+        "================================="
+      );
+      console.log("");
 
-            accessTokenReceived,
+      return res.status(200).json({
+        success: true,
 
-            refreshTokenReceived,
+        message:
+          "Google Drive connected successfully.",
 
-            nextStep: refreshTokenReceived
-                ? "Refresh token received. Store it securely as GOOGLE_REFRESH_TOKEN."
-                : "Refresh token was not returned. Re-authorize using the Google consent screen.",
-        });
+        accessTokenReceived,
+
+        refreshTokenReceived,
+
+        accountVerified:
+          Boolean(
+            connectedEmail
+          ),
+
+        nextStep:
+          refreshTokenReceived
+            ? "New refresh token received. Save it as GOOGLE_REFRESH_TOKEN in local and deployed environment variables."
+            : "No new refresh token was returned. If the existing token is invalid, revoke the app permission and authorize again.",
+      });
     } catch (error) {
-        console.error(
-            "❌ Google Callback Error:",
-            error.message
+      console.error(
+        "❌ Google Callback Error:",
+        getGoogleErrorMessage(
+          error
+        )
+      );
+
+      const normalizedError =
+        createGoogleAuthError(
+          error
         );
 
-        return res.status(500).json({
-            success: false,
+      return res.status(500).json({
+        success: false,
 
-            message:
-                "Google Drive authentication failed",
+        code:
+          normalizedError.code,
 
-            error:
-                process.env.NODE_ENV === "development"
-                    ? error.message
-                    : undefined,
-        });
+        message:
+          normalizedError.message,
+
+        error:
+          process.env.NODE_ENV ===
+          "development"
+            ? normalizedError.originalMessage ||
+              normalizedError.message
+            : undefined,
+      });
     }
-});
+  }
+);
 
-// ======================================================
-// TEST GOOGLE DRIVE CONNECTION
-//
-// GET /api/google-drive/test
-// ======================================================
+// TEST CONNECTION
 
-router.get("/test", async (req, res) => {
+router.get(
+  "/test",
+  async (req, res) => {
     try {
-        const drive = getDriveClient();
+      const connection =
+        await verifyGoogleDriveConnection();
 
-        const response =
-            await drive.files.list({
-                pageSize: 10,
+      const drive =
+        getDriveClient();
 
-                fields:
-                    "files(id,name,mimeType,createdTime,modifiedTime,size)",
+      const response =
+        await drive.files.list({
+          pageSize: 10,
 
-                orderBy:
-                    "createdTime desc",
-            });
+          fields:
+            "files(id,name,mimeType,createdTime,modifiedTime,size)",
 
-        const files =
-            response.data.files || [];
-
-        return res.status(200).json({
-            success: true,
-
-            message:
-                "Google Drive API working correctly ✅",
-
-            filesFound:
-                files.length,
-
-            files,
+          orderBy:
+            "createdTime desc",
         });
+
+      const files =
+        response.data.files ||
+        [];
+
+      return res.status(200).json({
+        success: true,
+
+        message:
+          "Google Drive API is working correctly.",
+
+        authenticated: true,
+
+        user:
+          connection.user,
+
+        filesFound:
+          files.length,
+
+        files,
+      });
     } catch (error) {
-        console.error(
-            "❌ Google Drive Test Error:",
-            error.message
-        );
+      console.error(
+        "❌ Google Drive Test Error:",
+        getGoogleErrorMessage(
+          error
+        )
+      );
 
-        return res.status(500).json({
-            success: false,
+      const normalizedError =
+        error?.code ===
+        "GOOGLE_DRIVE_AUTH_REQUIRED"
+          ? error
+          : createGoogleAuthError(
+              error
+            );
 
-            message:
-                "Google Drive connection test failed",
+      const authRequired =
+        normalizedError.code ===
+        "GOOGLE_DRIVE_AUTH_REQUIRED";
 
-            error:
-                process.env.NODE_ENV === "development"
-                    ? error.message
-                    : undefined,
+      return res
+        .status(
+          authRequired
+            ? 401
+            : 500
+        )
+        .json({
+          success: false,
+
+          code:
+            normalizedError.code,
+
+          message:
+            authRequired
+              ? "Google Drive authorization is invalid or expired. Reconnect Google Drive."
+              : "Google Drive connection test failed.",
+
+          error:
+            process.env.NODE_ENV ===
+            "development"
+              ? normalizedError.message
+              : undefined,
+
+          reconnectUrl:
+            authRequired
+              ? "/api/google-drive/auth"
+              : undefined,
         });
     }
-});
+  }
+);
 
-// ======================================================
-// GOOGLE DRIVE ABOUT / ACCOUNT TEST
-//
-// GET /api/google-drive/about
-//
-// Confirms that the stored refresh token can actually
-// authenticate with Google Drive.
-// ======================================================
+// ABOUT
 
-router.get("/about", async (req, res) => {
+router.get(
+  "/about",
+  async (req, res) => {
     try {
-        const drive = getDriveClient();
+      await verifyGoogleAccess();
 
-        const response =
-            await drive.about.get({
-                fields:
-                    "user(displayName,emailAddress),storageQuota",
-            });
+      const drive =
+        getDriveClient();
 
-        return res.status(200).json({
-            success: true,
-
-            message:
-                "Google Drive authentication working correctly ✅",
-
-            user: {
-                displayName:
-                    response.data.user?.displayName ||
-                    null,
-
-                emailAddress:
-                    response.data.user?.emailAddress ||
-                    null,
-            },
-
-            storageQuota:
-                response.data.storageQuota || null,
+      const response =
+        await drive.about.get({
+          fields:
+            "user(displayName,emailAddress),storageQuota",
         });
+
+      return res.status(200).json({
+        success: true,
+
+        message:
+          "Google Drive authentication is working correctly.",
+
+        authenticated: true,
+
+        user: {
+          displayName:
+            response.data.user
+              ?.displayName ||
+            null,
+
+          emailAddress:
+            response.data.user
+              ?.emailAddress ||
+            null,
+        },
+
+        storageQuota:
+          response.data
+            .storageQuota ||
+          null,
+      });
     } catch (error) {
-        console.error(
-            "❌ Google Drive About Error:",
-            error.message
-        );
+      console.error(
+        "❌ Google Drive About Error:",
+        getGoogleErrorMessage(
+          error
+        )
+      );
 
-        return res.status(500).json({
-            success: false,
+      const normalizedError =
+        error?.code ===
+        "GOOGLE_DRIVE_AUTH_REQUIRED"
+          ? error
+          : createGoogleAuthError(
+              error
+            );
 
-            message:
-                "Unable to access Google Drive account",
+      const authRequired =
+        normalizedError.code ===
+        "GOOGLE_DRIVE_AUTH_REQUIRED";
 
-            error:
-                process.env.NODE_ENV === "development"
-                    ? error.message
-                    : undefined,
+      return res
+        .status(
+          authRequired
+            ? 401
+            : 500
+        )
+        .json({
+          success: false,
+
+          code:
+            normalizedError.code,
+
+          message:
+            authRequired
+              ? "Google Drive needs to be re-authorized."
+              : "Unable to access Google Drive account.",
+
+          error:
+            process.env.NODE_ENV ===
+            "development"
+              ? normalizedError.message
+              : undefined,
         });
     }
-});
+  }
+);
 
-// ======================================================
-// EXPORT HELPERS
-//
-// These can later be imported into upload routes,
-// blog routes, backup services, etc.
-// ======================================================
+// TOKEN HEALTH CHECK
+
+router.get(
+  "/health",
+  async (req, res) => {
+    try {
+      const connection =
+        await verifyGoogleDriveConnection();
+
+      return res.status(200).json({
+        success: true,
+
+        connected: true,
+
+        refreshTokenConfigured:
+          true,
+
+        user:
+          connection.user,
+
+        message:
+          "Google Drive OAuth is healthy.",
+      });
+    } catch (error) {
+      const normalizedError =
+        error?.code ===
+        "GOOGLE_DRIVE_AUTH_REQUIRED"
+          ? error
+          : createGoogleAuthError(
+              error
+            );
+
+      return res.status(401).json({
+        success: false,
+
+        connected: false,
+
+        code:
+          normalizedError.code,
+
+        message:
+          normalizedError.message,
+
+        reconnectUrl:
+          "/api/google-drive/auth",
+      });
+    }
+  }
+);
+
+// EXPORTS
 
 export {
-    getOAuthClient,
-    getDriveClient,
+  getOAuthClient,
+  getDriveClient,
+  verifyGoogleAccess,
+  verifyGoogleDriveConnection,
 };
-
-// ======================================================
-// EXPORT ROUTER
-// ======================================================
 
 export default router;
