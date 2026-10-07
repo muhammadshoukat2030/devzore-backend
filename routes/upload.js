@@ -4,42 +4,61 @@ import sharp from "sharp";
 import crypto from "crypto";
 import { Readable } from "stream";
 
-import { protect, adminOnly } from "../middleware/auth.js";
-import { getDriveClient } from "./googleDrive.js";
+import {
+  protect,
+  adminOnly,
+} from "../middleware/auth.js";
+
+import {
+  getDriveClient,
+} from "./googleDrive.js";
 
 const router = express.Router();
 
+// ======================================================
 // CONFIG
+// ======================================================
 
-const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB
-const MAX_PUBLIC_IMAGE_SIZE = 10 * 1024 * 1024; // 10 MB safety limit
+const MAX_FILE_SIZE =
+  5 * 1024 * 1024; // 5 MB
+
+const MAX_PUBLIC_IMAGE_SIZE =
+  10 * 1024 * 1024; // 10 MB
 
 const MAX_IMAGE_WIDTH = 1600;
 const MIN_IMAGE_WIDTH = 520;
 
-const TARGET_IMAGE_SIZE = 70 * 1024; // preferred ~70 KB
-const HARD_MAX_IMAGE_SIZE = 80 * 1024; // maximum target 80 KB
+const TARGET_IMAGE_SIZE =
+  70 * 1024;
+
+const HARD_MAX_IMAGE_SIZE =
+  80 * 1024;
 
 const START_WEBP_QUALITY = 80;
 const MIN_WEBP_QUALITY = 38;
 const QUALITY_STEP = 8;
 
 const DRIVE_FOLDER_ID =
-  process.env.GOOGLE_DRIVE_FOLDER_ID?.trim() || "";
+  process.env.GOOGLE_DRIVE_FOLDER_ID?.trim() ||
+  "";
 
+// ======================================================
 // MULTER
+// ======================================================
 
-const storage = multer.memoryStorage();
+const storage =
+  multer.memoryStorage();
 
-const ALLOWED_IMAGE_TYPES = new Set([
-  "image/jpeg",
-  "image/jpg",
-  "image/png",
-  "image/webp",
-  "image/avif",
-  "image/gif",
-  "image/tiff",
-]);
+const ALLOWED_IMAGE_TYPES =
+  new Set([
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "image/webp",
+    "image/avif",
+    "image/gif",
+    "image/tiff",
+  ]);
 
 const upload = multer({
   storage,
@@ -49,12 +68,24 @@ const upload = multer({
     files: 1,
   },
 
-  fileFilter: (req, file, cb) => {
+  fileFilter: (
+    req,
+    file,
+    cb
+  ) => {
     if (!file?.mimetype) {
-      return cb(new Error("Invalid image file"));
+      return cb(
+        new Error(
+          "Invalid image file"
+        )
+      );
     }
 
-    if (!ALLOWED_IMAGE_TYPES.has(file.mimetype)) {
+    if (
+      !ALLOWED_IMAGE_TYPES.has(
+        file.mimetype
+      )
+    ) {
       return cb(
         new Error(
           "Only JPG, PNG, WebP, AVIF, GIF and TIFF images are allowed"
@@ -67,52 +98,98 @@ const upload = multer({
   },
 });
 
-// HELPERS
+// ======================================================
+// GENERAL HELPERS
+// ======================================================
 
-const bufferToStream = (buffer) => {
+const bufferToStream = (
+  buffer
+) => {
   return Readable.from(buffer);
 };
 
 const createImageName = () => {
   const timestamp = Date.now();
-  const random = crypto.randomBytes(5).toString("hex");
+
+  const random =
+    crypto
+      .randomBytes(5)
+      .toString("hex");
 
   return `${timestamp}-${random}.webp`;
 };
 
-const formatBytes = (bytes = 0) => {
-  if (!Number.isFinite(bytes)) return "0 KB";
+const formatBytes = (
+  bytes = 0
+) => {
+  if (
+    !Number.isFinite(bytes)
+  ) {
+    return "0 KB";
+  }
 
-  return `${(bytes / 1024).toFixed(2)} KB`;
+  return `${(
+    bytes / 1024
+  ).toFixed(2)} KB`;
 };
 
-const isValidDriveFileId = (fileId) => {
-  return /^[a-zA-Z0-9_-]+$/.test(fileId || "");
+const isValidDriveFileId = (
+  fileId
+) => {
+  return /^[a-zA-Z0-9_-]+$/.test(
+    fileId || ""
+  );
 };
 
-const getRequestBaseUrl = (req) => {
+// ======================================================
+// BACKEND PUBLIC ORIGIN
+// ======================================================
+//
+// Supports:
+//
+// Local:
+// http://localhost:5000
+//
+// Production:
+// https://devzore-backend.vercel.app
+//
+// API_PUBLIC_URL / BACKEND_URL can be:
+// https://backend.com
+// OR
+// https://backend.com/api
+//
+// Both work.
+// ======================================================
+
+const getRequestBaseUrl = (
+  req
+) => {
   const configuredBaseUrl =
     process.env.API_PUBLIC_URL?.trim() ||
     process.env.BACKEND_URL?.trim();
 
   if (configuredBaseUrl) {
-    return configuredBaseUrl.replace(/\/+$/, "");
+    return configuredBaseUrl
+      .replace(/\/+$/, "")
+      .replace(/\/api$/, "");
   }
 
-  const forwardedProto = req
-    .get("x-forwarded-proto")
-    ?.split(",")[0]
-    ?.trim();
+  const forwardedProto =
+    req
+      .get("x-forwarded-proto")
+      ?.split(",")[0]
+      ?.trim();
 
-  const forwardedHost = req
-    .get("x-forwarded-host")
-    ?.split(",")[0]
-    ?.trim();
+  const forwardedHost =
+    req
+      .get("x-forwarded-host")
+      ?.split(",")[0]
+      ?.trim();
 
   const protocol =
     forwardedProto ||
     req.protocol ||
-    "https";
+    "http";
 
   const host =
     forwardedHost ||
@@ -121,13 +198,71 @@ const getRequestBaseUrl = (req) => {
   return `${protocol}://${host}`;
 };
 
+// ======================================================
+// GOOGLE ERROR HELPERS
+// ======================================================
+
+const getGoogleErrorMessage = (
+  error
+) => {
+  return (
+    error?.response?.data
+      ?.error_description ||
+    error?.response?.data
+      ?.error?.message ||
+    error?.response?.data
+      ?.error ||
+    error?.message ||
+    "Unknown Google Drive error"
+  );
+};
+
+const isGoogleAuthFailure = (
+  error
+) => {
+  const message =
+    getGoogleErrorMessage(
+      error
+    ).toLowerCase();
+
+  return (
+    message.includes(
+      "invalid_grant"
+    ) ||
+    message.includes(
+      "invalid_client"
+    ) ||
+    message.includes(
+      "expired"
+    ) ||
+    message.includes(
+      "revoked"
+    ) ||
+    message.includes(
+      "unauthorized"
+    )
+  );
+};
+
+// ======================================================
 // IMAGE MIME DETECTION
+// ======================================================
+//
+// IMPORTANT:
+//
+// We do NOT trust arbitrary upstream Content-Type.
+//
+// App images are converted to WebP anyway.
+// Magic bytes are checked before serving.
+// ======================================================
 
 const detectImageMime = (
-  buffer,
-  upstreamContentType = ""
+  buffer
 ) => {
-  if (!buffer || buffer.length < 12) {
+  if (
+    !buffer ||
+    buffer.length < 12
+  ) {
     return null;
   }
 
@@ -151,9 +286,10 @@ const detectImageMime = (
   }
 
   // GIF
-  const gifHeader = buffer
-    .subarray(0, 6)
-    .toString("ascii");
+  const gifHeader =
+    buffer
+      .subarray(0, 6)
+      .toString("ascii");
 
   if (
     gifHeader === "GIF87a" ||
@@ -163,714 +299,1047 @@ const detectImageMime = (
   }
 
   // WEBP
-  const riff = buffer
-    .subarray(0, 4)
-    .toString("ascii");
+  const riff =
+    buffer
+      .subarray(0, 4)
+      .toString("ascii");
 
-  const webp = buffer
-    .subarray(8, 12)
-    .toString("ascii");
+  const webp =
+    buffer
+      .subarray(8, 12)
+      .toString("ascii");
 
-  if (riff === "RIFF" && webp === "WEBP") {
+  if (
+    riff === "RIFF" &&
+    webp === "WEBP"
+  ) {
     return "image/webp";
   }
 
-  // AVIF
-  const fileTypeBox = buffer
-    .subarray(4, 8)
-    .toString("ascii");
+  // AVIF / AVIS
+  const fileTypeBox =
+    buffer
+      .subarray(4, 8)
+      .toString("ascii");
 
-  const avifBrand = buffer
-    .subarray(8, 12)
-    .toString("ascii");
+  const brand =
+    buffer
+      .subarray(8, 12)
+      .toString("ascii");
 
   if (
     fileTypeBox === "ftyp" &&
-    ["avif", "avis"].includes(avifBrand)
+    [
+      "avif",
+      "avis",
+    ].includes(brand)
   ) {
     return "image/avif";
-  }
-
-  if (
-    upstreamContentType &&
-    upstreamContentType.startsWith("image/")
-  ) {
-    return upstreamContentType.split(";")[0];
   }
 
   return null;
 };
 
-// COMPRESS IMAGE
+// ======================================================
+// COMPRESS IMAGE TO WEBP
+// ======================================================
 
-const createCompressedWebp = async (
-  inputBuffer,
-  width,
-  quality
-) => {
-  const { data, info } = await sharp(inputBuffer, {
-    failOn: "none",
-    animated: false,
-  })
-    .rotate()
-    .resize({
-      width: Math.max(
-        1,
-        Math.round(width)
-      ),
+const createCompressedWebp =
+  async (
+    inputBuffer,
+    width,
+    quality
+  ) => {
+    const {
+      data,
+      info,
+    } = await sharp(
+      inputBuffer,
+      {
+        failOn: "none",
+        animated: false,
+      }
+    )
+      .rotate()
 
-      withoutEnlargement: true,
-      fit: "inside",
-    })
-    .webp({
+      .resize({
+        width: Math.max(
+          1,
+          Math.round(width)
+        ),
+
+        withoutEnlargement: true,
+        fit: "inside",
+      })
+
+      .webp({
+        quality,
+        effort: 6,
+        smartSubsample: true,
+      })
+
+      .toBuffer({
+        resolveWithObject: true,
+      });
+
+    return {
+      buffer: data,
+
+      width:
+        info?.width ||
+        null,
+
+      height:
+        info?.height ||
+        null,
+
+      size:
+        data.length,
+
       quality,
-      effort: 6,
-      smartSubsample: true,
-    })
-    .toBuffer({
-      resolveWithObject: true,
-    });
-
-  return {
-    buffer: data,
-    width: info?.width || null,
-    height: info?.height || null,
-    size: data.length,
-    quality,
+    };
   };
-};
 
-const compressImage = async (buffer) => {
-  if (!buffer || !Buffer.isBuffer(buffer)) {
-    throw new Error("Invalid image buffer");
-  }
-
-  try {
-    const originalMetadata = await sharp(buffer, {
-      failOn: "none",
-    }).metadata();
-
+const compressImage =
+  async (buffer) => {
     if (
-      !originalMetadata?.width ||
-      !originalMetadata?.height
+      !buffer ||
+      !Buffer.isBuffer(buffer)
     ) {
       throw new Error(
-        "Unable to read image dimensions"
+        "Invalid image buffer"
       );
     }
 
-    let currentWidth = Math.min(
-      originalMetadata.width,
-      MAX_IMAGE_WIDTH
-    );
-
-    let currentQuality =
-      START_WEBP_QUALITY;
-
-    let smallestResult = null;
-
-    // Main compression loop
-    for (
-      let attempt = 1;
-      attempt <= 24;
-      attempt += 1
-    ) {
-      const result =
-        await createCompressedWebp(
+    try {
+      const originalMetadata =
+        await sharp(
           buffer,
-          currentWidth,
-          currentQuality
+          {
+            failOn: "none",
+          }
+        ).metadata();
+
+      if (
+        !originalMetadata?.width ||
+        !originalMetadata?.height
+      ) {
+        throw new Error(
+          "Unable to read image dimensions"
+        );
+      }
+
+      let currentWidth =
+        Math.min(
+          originalMetadata.width,
+          MAX_IMAGE_WIDTH
         );
 
-      if (
-        !smallestResult ||
-        result.size < smallestResult.size
+      let currentQuality =
+        START_WEBP_QUALITY;
+
+      let smallestResult =
+        null;
+
+      // ==================================================
+      // MAIN COMPRESSION LOOP
+      // ==================================================
+
+      for (
+        let attempt = 1;
+        attempt <= 24;
+        attempt += 1
       ) {
-        smallestResult = result;
-      }
+        const result =
+          await createCompressedWebp(
+            buffer,
+            currentWidth,
+            currentQuality
+          );
 
-      console.log(
-        `🗜️ Compression attempt ${attempt}:`,
-        `${result.width}x${result.height}`,
-        `quality ${currentQuality}`,
-        formatBytes(result.size)
-      );
+        if (
+          !smallestResult ||
+          result.size <
+            smallestResult.size
+        ) {
+          smallestResult =
+            result;
+        }
 
-      // Excellent result
-      if (
-        result.size <= TARGET_IMAGE_SIZE
-      ) {
-        return {
-          ...result,
-          format: "webp",
-          originalSize: buffer.length,
-          targetMet: true,
-        };
-      }
-
-      // Under hard maximum: keep good quality
-      if (
-        result.size <= HARD_MAX_IMAGE_SIZE
-      ) {
-        return {
-          ...result,
-          format: "webp",
-          originalSize: buffer.length,
-          targetMet: true,
-        };
-      }
-
-      // First reduce quality
-      if (
-        currentQuality >
-        MIN_WEBP_QUALITY
-      ) {
-        currentQuality = Math.max(
-          MIN_WEBP_QUALITY,
-          currentQuality - QUALITY_STEP
-        );
-
-        continue;
-      }
-
-      // Then reduce dimensions
-      if (
-        currentWidth >
-        MIN_IMAGE_WIDTH
-      ) {
-        currentWidth = Math.max(
-          MIN_IMAGE_WIDTH,
-          Math.floor(
-            currentWidth * 0.84
+        console.log(
+          `🗜️ Compression attempt ${attempt}:`,
+          `${result.width}x${result.height}`,
+          `quality ${currentQuality}`,
+          formatBytes(
+            result.size
           )
         );
 
-        currentQuality = 72;
+        // Preferred target reached
+        if (
+          result.size <=
+          TARGET_IMAGE_SIZE
+        ) {
+          return {
+            ...result,
+            format: "webp",
+            originalSize:
+              buffer.length,
+            targetMet: true,
+          };
+        }
 
-        continue;
+        // Hard maximum reached
+        if (
+          result.size <=
+          HARD_MAX_IMAGE_SIZE
+        ) {
+          return {
+            ...result,
+            format: "webp",
+            originalSize:
+              buffer.length,
+            targetMet: true,
+          };
+        }
+
+        // Reduce quality first
+        if (
+          currentQuality >
+          MIN_WEBP_QUALITY
+        ) {
+          currentQuality =
+            Math.max(
+              MIN_WEBP_QUALITY,
+              currentQuality -
+                QUALITY_STEP
+            );
+
+          continue;
+        }
+
+        // Then reduce dimensions
+        if (
+          currentWidth >
+          MIN_IMAGE_WIDTH
+        ) {
+          currentWidth =
+            Math.max(
+              MIN_IMAGE_WIDTH,
+
+              Math.floor(
+                currentWidth *
+                  0.84
+              )
+            );
+
+          currentQuality = 72;
+
+          continue;
+        }
+
+        break;
       }
 
-      break;
-    }
+      // ==================================================
+      // EMERGENCY COMPRESSION
+      // ==================================================
 
-    // Emergency compression
-    let emergencyWidth = Math.min(
-      currentWidth,
-      MIN_IMAGE_WIDTH
-    );
-
-    let emergencyQuality = 34;
-
-    for (
-      let attempt = 1;
-      attempt <= 8;
-      attempt += 1
-    ) {
-      const result =
-        await createCompressedWebp(
-          buffer,
-          emergencyWidth,
-          emergencyQuality
+      let emergencyWidth =
+        Math.min(
+          currentWidth,
+          MIN_IMAGE_WIDTH
         );
 
-      if (
-        !smallestResult ||
-        result.size < smallestResult.size
+      let emergencyQuality =
+        34;
+
+      for (
+        let attempt = 1;
+        attempt <= 8;
+        attempt += 1
       ) {
-        smallestResult = result;
-      }
-
-      if (
-        result.size <= HARD_MAX_IMAGE_SIZE
-      ) {
-        return {
-          ...result,
-          format: "webp",
-          originalSize: buffer.length,
-          targetMet: true,
-        };
-      }
-
-      emergencyWidth = Math.max(
-        360,
-        Math.floor(
-          emergencyWidth * 0.85
-        )
-      );
-
-      emergencyQuality = Math.max(
-        26,
-        emergencyQuality - 3
-      );
-    }
-
-    if (!smallestResult) {
-      throw new Error(
-        "Unable to compress image"
-      );
-    }
-
-    // We enforce the requested maximum instead of
-    // silently storing a very large image.
-    if (
-      smallestResult.size >
-      HARD_MAX_IMAGE_SIZE
-    ) {
-      throw new Error(
-        `Unable to compress this image below 80 KB. Smallest result was ${formatBytes(
-          smallestResult.size
-        )}.`
-      );
-    }
-
-    return {
-      ...smallestResult,
-      format: "webp",
-      originalSize: buffer.length,
-      targetMet: true,
-    };
-  } catch (error) {
-    throw new Error(
-      `Image compression failed: ${error.message}`
-    );
-  }
-};
-
-// GOOGLE DRIVE URLS
-
-const createGoogleDriveViewUrl = (
-  fileId
-) => {
-  return `https://drive.google.com/file/d/${encodeURIComponent(
-    fileId
-  )}/view`;
-};
-
-const createGoogleDriveDownloadUrl = (
-  fileId
-) => {
-  return `https://drive.google.com/uc?export=download&id=${encodeURIComponent(
-    fileId
-  )}`;
-};
-
-const createGoogleDrivePublicUrl = (
-  fileId
-) => {
-  return `https://drive.google.com/uc?export=view&id=${encodeURIComponent(
-    fileId
-  )}`;
-};
-
-// PUBLIC DRIVE FETCH
-//
-// Important:
-// Ye function Google OAuth use nahi karta.
-// File "anyone reader" honi chahiye.
-//
-// Is wajah se already-published images OAuth
-// refresh token expire hone ke baad bhi load ho sakti hain.
-
-const getPublicDriveCandidates = (
-  fileId
-) => {
-  const encodedId =
-    encodeURIComponent(fileId);
-
-  return [
-    `https://drive.usercontent.google.com/download?id=${encodedId}&export=download&confirm=t`,
-
-    `https://drive.google.com/uc?export=download&id=${encodedId}&confirm=t`,
-
-    `https://drive.google.com/uc?export=view&id=${encodedId}`,
-  ];
-};
-
-const fetchWithTimeout = async (
-  url,
-  timeout = 15000
-) => {
-  const controller =
-    new AbortController();
-
-  const timeoutId = setTimeout(() => {
-    controller.abort();
-  }, timeout);
-
-  try {
-    return await fetch(url, {
-      method: "GET",
-
-      redirect: "follow",
-
-      signal: controller.signal,
-
-      headers: {
-        Accept:
-          "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
-
-        "User-Agent":
-          "Mozilla/5.0 DevZoreImageProxy/1.0",
-      },
-    });
-  } finally {
-    clearTimeout(timeoutId);
-  }
-};
-
-const fetchPublicDriveImage = async (
-  fileId
-) => {
-  const candidates =
-    getPublicDriveCandidates(fileId);
-
-  let lastError = null;
-
-  for (const url of candidates) {
-    try {
-      const response =
-        await fetchWithTimeout(url);
-
-      if (!response.ok) {
-        lastError = new Error(
-          `Google Drive returned HTTP ${response.status}`
-        );
-
-        continue;
-      }
-
-      const contentLengthHeader =
-        response.headers.get(
-          "content-length"
-        );
-
-      if (contentLengthHeader) {
-        const contentLength =
-          Number(contentLengthHeader);
+        const result =
+          await createCompressedWebp(
+            buffer,
+            emergencyWidth,
+            emergencyQuality
+          );
 
         if (
-          Number.isFinite(
-            contentLength
-          ) &&
-          contentLength >
-            MAX_PUBLIC_IMAGE_SIZE
+          !smallestResult ||
+          result.size <
+            smallestResult.size
+        ) {
+          smallestResult =
+            result;
+        }
+
+        if (
+          result.size <=
+          HARD_MAX_IMAGE_SIZE
+        ) {
+          return {
+            ...result,
+
+            format:
+              "webp",
+
+            originalSize:
+              buffer.length,
+
+            targetMet:
+              true,
+          };
+        }
+
+        emergencyWidth =
+          Math.max(
+            360,
+
+            Math.floor(
+              emergencyWidth *
+                0.85
+            )
+          );
+
+        emergencyQuality =
+          Math.max(
+            26,
+
+            emergencyQuality -
+              3
+          );
+      }
+
+      if (!smallestResult) {
+        throw new Error(
+          "Unable to compress image"
+        );
+      }
+
+      if (
+        smallestResult.size >
+        HARD_MAX_IMAGE_SIZE
+      ) {
+        throw new Error(
+          `Unable to compress this image below 80 KB. Smallest result was ${formatBytes(
+            smallestResult.size
+          )}.`
+        );
+      }
+
+      return {
+        ...smallestResult,
+
+        format:
+          "webp",
+
+        originalSize:
+          buffer.length,
+
+        targetMet:
+          true,
+      };
+    } catch (error) {
+      throw new Error(
+        `Image compression failed: ${error.message}`
+      );
+    }
+  };
+
+// ======================================================
+// GOOGLE DRIVE URL HELPERS
+// ======================================================
+
+const createGoogleDriveViewUrl =
+  (fileId) => {
+    return `https://drive.google.com/file/d/${encodeURIComponent(
+      fileId
+    )}/view`;
+  };
+
+const createGoogleDriveDownloadUrl =
+  (fileId) => {
+    return `https://drive.google.com/uc?export=download&id=${encodeURIComponent(
+      fileId
+    )}`;
+  };
+
+const createGoogleDrivePublicUrl =
+  (fileId) => {
+    return `https://drive.google.com/uc?export=view&id=${encodeURIComponent(
+      fileId
+    )}`;
+  };
+
+// ======================================================
+// PUBLIC GOOGLE DRIVE FETCH
+// ======================================================
+//
+// Uploaded images are shared:
+//
+// type: anyone
+// role: reader
+//
+// Therefore the public image route normally does NOT
+// depend on OAuth.
+//
+// If Google's public media URL fails, we later use
+// authenticated Drive API as a fallback.
+// ======================================================
+
+const getPublicDriveCandidates =
+  (fileId) => {
+    const encodedId =
+      encodeURIComponent(
+        fileId
+      );
+
+    return [
+      `https://drive.usercontent.google.com/download?id=${encodedId}&export=download&confirm=t`,
+
+      `https://drive.google.com/uc?export=download&id=${encodedId}&confirm=t`,
+
+      `https://drive.google.com/uc?export=view&id=${encodedId}`,
+    ];
+  };
+
+// ======================================================
+// FETCH WITH TIMEOUT
+// ======================================================
+
+const fetchWithTimeout =
+  async (
+    url,
+    timeout = 15000
+  ) => {
+    const controller =
+      new AbortController();
+
+    const timeoutId =
+      setTimeout(
+        () => {
+          controller.abort();
+        },
+        timeout
+      );
+
+    try {
+      return await fetch(
+        url,
+        {
+          method: "GET",
+
+          redirect:
+            "follow",
+
+          signal:
+            controller.signal,
+
+          headers: {
+            Accept:
+              "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+
+            "User-Agent":
+              "DevZoreImageProxy/1.0",
+          },
+        }
+      );
+    } finally {
+      clearTimeout(
+        timeoutId
+      );
+    }
+  };
+
+// ======================================================
+// FETCH PUBLIC DRIVE IMAGE
+// ======================================================
+
+const fetchPublicDriveImage =
+  async (fileId) => {
+    const candidates =
+      getPublicDriveCandidates(
+        fileId
+      );
+
+    let lastError =
+      null;
+
+    for (
+      const url of candidates
+    ) {
+      try {
+        const response =
+          await fetchWithTimeout(
+            url
+          );
+
+        if (!response.ok) {
+          lastError =
+            new Error(
+              `Google Drive returned HTTP ${response.status}`
+            );
+
+          continue;
+        }
+
+        const contentLengthHeader =
+          response.headers.get(
+            "content-length"
+          );
+
+        if (
+          contentLengthHeader
+        ) {
+          const contentLength =
+            Number(
+              contentLengthHeader
+            );
+
+          if (
+            Number.isFinite(
+              contentLength
+            ) &&
+            contentLength >
+              MAX_PUBLIC_IMAGE_SIZE
+          ) {
+            throw new Error(
+              "Drive image is larger than allowed proxy size"
+            );
+          }
+        }
+
+        const arrayBuffer =
+          await response.arrayBuffer();
+
+        const imageBuffer =
+          Buffer.from(
+            arrayBuffer
+          );
+
+        if (
+          imageBuffer.length >
+          MAX_PUBLIC_IMAGE_SIZE
         ) {
           throw new Error(
             "Drive image is larger than allowed proxy size"
           );
         }
+
+        const mimeType =
+          detectImageMime(
+            imageBuffer
+          );
+
+        // Google sometimes returns an HTML page instead
+        // of the actual file.
+        if (!mimeType) {
+          lastError =
+            new Error(
+              "Google Drive public endpoint did not return image bytes"
+            );
+
+          continue;
+        }
+
+        return {
+          buffer:
+            imageBuffer,
+
+          mimeType,
+
+          source:
+            "public",
+        };
+      } catch (error) {
+        lastError =
+          error;
       }
-
-      const arrayBuffer =
-        await response.arrayBuffer();
-
-      const imageBuffer =
-        Buffer.from(arrayBuffer);
-
-      if (
-        imageBuffer.length >
-        MAX_PUBLIC_IMAGE_SIZE
-      ) {
-        throw new Error(
-          "Drive image is larger than allowed proxy size"
-        );
-      }
-
-      const upstreamContentType =
-        response.headers
-          .get("content-type")
-          ?.toLowerCase() || "";
-
-      const mimeType =
-        detectImageMime(
-          imageBuffer,
-          upstreamContentType
-        );
-
-      if (!mimeType) {
-        lastError = new Error(
-          "Google Drive did not return a valid image"
-        );
-
-        continue;
-      }
-
-      return {
-        buffer: imageBuffer,
-        mimeType,
-      };
-    } catch (error) {
-      lastError = error;
-    }
-  }
-
-  throw (
-    lastError ||
-    new Error(
-      "Unable to fetch public Google Drive image"
-    )
-  );
-};
-
-// UPLOAD TO GOOGLE DRIVE
-
-const uploadImageToGoogleDrive = async (
-  buffer,
-  filename
-) => {
-  let fileId = null;
-
-  try {
-    const drive = getDriveClient();
-
-    const requestBody = {
-      name: filename,
-      mimeType: "image/webp",
-    };
-
-    if (DRIVE_FOLDER_ID) {
-      requestBody.parents = [
-        DRIVE_FOLDER_ID,
-      ];
     }
 
-    // Upload
-    const response =
-      await drive.files.create({
-        requestBody,
+    throw (
+      lastError ||
+      new Error(
+        "Unable to fetch public Google Drive image"
+      )
+    );
+  };
 
-        media: {
-          mimeType: "image/webp",
-          body: bufferToStream(buffer),
-        },
+// ======================================================
+// AUTHENTICATED DRIVE FALLBACK
+// ======================================================
+//
+// This is only used if the public URL fails.
+//
+// OAuth client automatically refreshes access tokens
+// using GOOGLE_REFRESH_TOKEN.
+// ======================================================
 
-        fields:
-          "id,name,mimeType,size,createdTime,modifiedTime",
+const fetchAuthenticatedDriveImage =
+  async (fileId) => {
+    const drive =
+      getDriveClient();
 
-        supportsAllDrives: true,
-      });
-
-    fileId = response?.data?.id;
-
-    if (!fileId) {
-      throw new Error(
-        "Google Drive did not return a file ID"
-      );
-    }
-
-    // Make public
-    await drive.permissions.create({
-      fileId,
-
-      requestBody: {
-        role: "reader",
-        type: "anyone",
-      },
-
-      fields: "id",
-
-      supportsAllDrives: true,
-    });
-
-    // Metadata
-    const fileResponse =
+    const metadataResponse =
       await drive.files.get({
         fileId,
 
         fields:
-          "id,name,mimeType,size,createdTime,modifiedTime,webViewLink,webContentLink",
+          "id,name,mimeType,size",
 
-        supportsAllDrives: true,
+        supportsAllDrives:
+          true,
       });
 
-    const file =
-      fileResponse?.data || {};
+    const declaredSize =
+      Number(
+        metadataResponse?.data
+          ?.size || 0
+      );
 
-    return {
-      fileId,
-
-      filename:
-        file.name ||
-        filename,
-
-      mimeType:
-        file.mimeType ||
-        "image/webp",
-
-      size:
-        file.size ||
-        buffer.length,
-
-      createdTime:
-        file.createdTime ||
-        null,
-
-      modifiedTime:
-        file.modifiedTime ||
-        null,
-
-      // Direct Drive references
-      driveUrl:
-        createGoogleDrivePublicUrl(
-          fileId
-        ),
-
-      webViewLink:
-        file.webViewLink ||
-        createGoogleDriveViewUrl(
-          fileId
-        ),
-
-      webContentLink:
-        file.webContentLink ||
-        createGoogleDriveDownloadUrl(
-          fileId
-        ),
-
-      downloadUrl:
-        createGoogleDriveDownloadUrl(
-          fileId
-        ),
-    };
-  } catch (error) {
-    // Cleanup incomplete upload
-    if (fileId) {
-      try {
-        const drive =
-          getDriveClient();
-
-        await drive.files.delete({
-          fileId,
-          supportsAllDrives: true,
-        });
-
-        console.log(
-          "🧹 Incomplete Drive upload removed:",
-          fileId
-        );
-      } catch (cleanupError) {
-        console.error(
-          "⚠️ Drive cleanup failed:",
-          cleanupError?.message
-        );
-      }
-    }
-
-    const googleMessage =
-      error?.response?.data?.error_description ||
-      error?.response?.data?.error?.message ||
-      error?.message ||
-      "Unknown Google Drive error";
-
-    throw new Error(
-      `Google Drive upload failed: ${googleMessage}`
-    );
-  }
-};
-
-// DELETE FROM GOOGLE DRIVE
-
-const deleteImageFromGoogleDrive = async (
-  fileId
-) => {
-  try {
-    const drive = getDriveClient();
-
-    await drive.files.delete({
-      fileId,
-      supportsAllDrives: true,
-    });
-
-    return true;
-  } catch (error) {
-    const status =
-      error?.code ||
-      error?.response?.status;
-
-    if (Number(status) === 404) {
+    if (
+      declaredSize &&
+      declaredSize >
+        MAX_PUBLIC_IMAGE_SIZE
+    ) {
       throw new Error(
-        "Google Drive image was not found"
+        "Drive image is larger than allowed proxy size"
       );
     }
 
-    const googleMessage =
-      error?.response?.data?.error_description ||
-      error?.response?.data?.error?.message ||
-      error?.message ||
-      "Unknown Google Drive error";
+    const response =
+      await drive.files.get(
+        {
+          fileId,
 
-    throw new Error(
-      `Google Drive delete failed: ${googleMessage}`
+          alt:
+            "media",
+
+          supportsAllDrives:
+            true,
+        },
+        {
+          responseType:
+            "arraybuffer",
+        }
+      );
+
+    const imageBuffer =
+      Buffer.isBuffer(
+        response.data
+      )
+        ? response.data
+        : Buffer.from(
+            response.data
+          );
+
+    if (
+      imageBuffer.length >
+      MAX_PUBLIC_IMAGE_SIZE
+    ) {
+      throw new Error(
+        "Drive image is larger than allowed proxy size"
+      );
+    }
+
+    const mimeType =
+      detectImageMime(
+        imageBuffer
+      );
+
+    if (!mimeType) {
+      throw new Error(
+        "Google Drive did not return valid image bytes"
+      );
+    }
+
+    return {
+      buffer:
+        imageBuffer,
+
+      mimeType,
+
+      source:
+        "oauth",
+    };
+  };
+
+// ======================================================
+// FINAL DRIVE IMAGE FETCH
+// ======================================================
+
+const getDriveImage =
+  async (fileId) => {
+    // First:
+    // public Drive access.
+    //
+    // This keeps blog images independent from OAuth
+    // during normal public viewing.
+
+    try {
+      return await fetchPublicDriveImage(
+        fileId
+      );
+    } catch (
+      publicError
+    ) {
+      console.warn(
+        "⚠️ Public Drive image fetch failed. Trying authenticated fallback:",
+        publicError?.message
+      );
+    }
+
+    // Second:
+    // authenticated fallback.
+
+    return await fetchAuthenticatedDriveImage(
+      fileId
     );
-  }
-};
+  };
 
+// ======================================================
+// UPLOAD TO GOOGLE DRIVE
+// ======================================================
+
+const uploadImageToGoogleDrive =
+  async (
+    buffer,
+    filename
+  ) => {
+    let fileId = null;
+
+    try {
+      const drive =
+        getDriveClient();
+
+      const requestBody = {
+        name:
+          filename,
+
+        mimeType:
+          "image/webp",
+      };
+
+      if (
+        DRIVE_FOLDER_ID
+      ) {
+        requestBody.parents = [
+          DRIVE_FOLDER_ID,
+        ];
+      }
+
+      // ==================================================
+      // CREATE FILE
+      // ==================================================
+
+      const response =
+        await drive.files.create({
+          requestBody,
+
+          media: {
+            mimeType:
+              "image/webp",
+
+            body:
+              bufferToStream(
+                buffer
+              ),
+          },
+
+          fields:
+            "id,name,mimeType,size,createdTime,modifiedTime",
+
+          supportsAllDrives:
+            true,
+        });
+
+      fileId =
+        response?.data?.id;
+
+      if (!fileId) {
+        throw new Error(
+          "Google Drive did not return a file ID"
+        );
+      }
+
+      // ==================================================
+      // PUBLIC READ PERMISSION
+      // ==================================================
+      //
+      // Blog image can now be loaded without requiring
+      // the website visitor to authenticate with Google.
+      // ==================================================
+
+      await drive.permissions.create({
+        fileId,
+
+        requestBody: {
+          role:
+            "reader",
+
+          type:
+            "anyone",
+
+          allowFileDiscovery:
+            false,
+        },
+
+        fields:
+          "id",
+
+        supportsAllDrives:
+          true,
+      });
+
+      // ==================================================
+      // GET FINAL METADATA
+      // ==================================================
+
+      const fileResponse =
+        await drive.files.get({
+          fileId,
+
+          fields:
+            "id,name,mimeType,size,createdTime,modifiedTime,webViewLink,webContentLink",
+
+          supportsAllDrives:
+            true,
+        });
+
+      const file =
+        fileResponse?.data ||
+        {};
+
+      return {
+        fileId,
+
+        filename:
+          file.name ||
+          filename,
+
+        mimeType:
+          file.mimeType ||
+          "image/webp",
+
+        size:
+          Number(
+            file.size ||
+              buffer.length
+          ),
+
+        createdTime:
+          file.createdTime ||
+          null,
+
+        modifiedTime:
+          file.modifiedTime ||
+          null,
+
+        driveUrl:
+          createGoogleDrivePublicUrl(
+            fileId
+          ),
+
+        webViewLink:
+          file.webViewLink ||
+          createGoogleDriveViewUrl(
+            fileId
+          ),
+
+        webContentLink:
+          file.webContentLink ||
+          createGoogleDriveDownloadUrl(
+            fileId
+          ),
+
+        downloadUrl:
+          createGoogleDriveDownloadUrl(
+            fileId
+          ),
+      };
+    } catch (error) {
+      // ==================================================
+      // CLEANUP PARTIAL UPLOAD
+      // ==================================================
+
+      if (fileId) {
+        try {
+          const drive =
+            getDriveClient();
+
+          await drive.files.delete({
+            fileId,
+
+            supportsAllDrives:
+              true,
+          });
+
+          console.log(
+            "🧹 Incomplete Drive upload removed:",
+            fileId
+          );
+        } catch (
+          cleanupError
+        ) {
+          console.error(
+            "⚠️ Drive cleanup failed:",
+            cleanupError
+              ?.message
+          );
+        }
+      }
+
+      const googleMessage =
+        getGoogleErrorMessage(
+          error
+        );
+
+      throw new Error(
+        `Google Drive upload failed: ${googleMessage}`
+      );
+    }
+  };
+
+// ======================================================
+// DELETE FROM GOOGLE DRIVE
+// ======================================================
+
+const deleteImageFromGoogleDrive =
+  async (fileId) => {
+    try {
+      const drive =
+        getDriveClient();
+
+      await drive.files.delete({
+        fileId,
+
+        supportsAllDrives:
+          true,
+      });
+
+      return true;
+    } catch (error) {
+      const status =
+        error?.code ||
+        error?.response?.status;
+
+      if (
+        Number(status) === 404
+      ) {
+        throw new Error(
+          "Google Drive image was not found"
+        );
+      }
+
+      throw new Error(
+        `Google Drive delete failed: ${getGoogleErrorMessage(
+          error
+        )}`
+      );
+    }
+  };
+
+// ======================================================
 // GET PUBLIC IMAGE
+// ======================================================
 //
-// No OAuth here.
+// GET
+// /api/upload/image/:fileId
 //
-// Existing:
-// /api/upload/image/FILE_ID
+// IMPORTANT:
 //
-// URL same rehne ki wajah se old MongoDB posts ko
-// manually change karne ki zaroorat nahi hogi.
+// No admin auth.
+// Public blog pages need to use this endpoint.
+//
+// Process:
+//
+// 1. Try public Google Drive file.
+// 2. If public endpoint fails, OAuth fallback.
+// 3. Return actual image bytes.
+// ======================================================
 
 router.get(
   "/image/:fileId",
+
   async (req, res) => {
     try {
       const fileId =
         req.params?.fileId?.trim();
 
       if (!fileId) {
-        return res.status(400).json({
-          success: false,
-          message:
-            "Google Drive file ID is required.",
-        });
+        return res
+          .status(400)
+          .json({
+            success:
+              false,
+
+            message:
+              "Google Drive file ID is required.",
+          });
       }
 
       if (
-        !isValidDriveFileId(fileId)
+        !isValidDriveFileId(
+          fileId
+        )
       ) {
-        return res.status(400).json({
-          success: false,
-          message:
-            "Invalid Google Drive file ID.",
-        });
+        return res
+          .status(400)
+          .json({
+            success:
+              false,
+
+            message:
+              "Invalid Google Drive file ID.",
+          });
       }
 
-      // Important:
-      // getDriveClient() intentionally NOT used here.
+      // ==================================================
+      // FETCH IMAGE
+      // ==================================================
 
-      const publicImage =
-        await fetchPublicDriveImage(
+      const driveImage =
+        await getDriveImage(
           fileId
         );
 
-      const etag = `"${crypto
-        .createHash("sha1")
-        .update(publicImage.buffer)
-        .digest("hex")}"`;
+      // ==================================================
+      // ETAG
+      // ==================================================
 
-      // Browser cache validation
+      const etag =
+        `"${crypto
+          .createHash("sha1")
+          .update(
+            driveImage.buffer
+          )
+          .digest("hex")}"`;
+
       if (
-        req.headers["if-none-match"] ===
-        etag
+        req.headers[
+          "if-none-match"
+        ] === etag
       ) {
-        res.status(304);
-        res.end();
-        return;
+        return res
+          .status(304)
+          .end();
       }
+
+      // ==================================================
+      // RESPONSE HEADERS
+      // ==================================================
 
       res.setHeader(
         "Content-Type",
-        publicImage.mimeType
+        driveImage.mimeType
       );
 
       res.setHeader(
         "Content-Length",
-        publicImage.buffer.length
+        driveImage.buffer
+          .length
       );
 
       res.setHeader(
@@ -878,6 +1347,8 @@ router.get(
         "inline"
       );
 
+      // Image ID changes whenever a new image is uploaded,
+      // so aggressive caching is safe.
       res.setHeader(
         "Cache-Control",
         "public, max-age=31536000, s-maxage=31536000, immutable"
@@ -888,6 +1359,7 @@ router.get(
         etag
       );
 
+      // IMPORTANT for localhost:5173 -> localhost:5000
       res.setHeader(
         "Cross-Origin-Resource-Policy",
         "cross-origin"
@@ -908,22 +1380,51 @@ router.get(
         "nosniff"
       );
 
-      return res.status(200).send(
-        publicImage.buffer
+      // Useful for debugging without exposing secrets.
+      res.setHeader(
+        "X-DevZore-Image-Source",
+        driveImage.source
       );
+
+      return res
+        .status(200)
+        .send(
+          driveImage.buffer
+        );
     } catch (error) {
+      const googleAuthError =
+        isGoogleAuthFailure(
+          error
+        );
+
       console.error(
-        "❌ Public Drive image error:",
+        "❌ Drive image serve error:",
         error?.message
       );
 
-      if (!res.headersSent) {
-        return res.status(404).json({
-          success: false,
+      if (
+        !res.headersSent
+      ) {
+        return res
+          .status(
+            googleAuthError
+              ? 503
+              : 404
+          )
+          .json({
+            success:
+              false,
 
-          message:
-            "Image could not be loaded. Make sure the Google Drive file is publicly readable.",
-        });
+            code:
+              googleAuthError
+                ? "GOOGLE_DRIVE_AUTH_REQUIRED"
+                : "IMAGE_NOT_FOUND",
+
+            message:
+              googleAuthError
+                ? "Google Drive authentication is unavailable."
+                : "Image could not be loaded.",
+          });
       }
 
       return res.end();
@@ -931,7 +1432,15 @@ router.get(
   }
 );
 
+// ======================================================
 // POST IMAGE
+// ======================================================
+//
+// POST
+// /api/upload/image
+//
+// Admin only.
+// ======================================================
 
 router.post(
   "/image",
@@ -939,16 +1448,22 @@ router.post(
   protect,
   adminOnly,
 
-  upload.single("image"),
+  upload.single(
+    "image"
+  ),
 
   async (req, res) => {
     try {
       if (!req.file) {
-        return res.status(400).json({
-          success: false,
-          message:
-            "No image provided",
-        });
+        return res
+          .status(400)
+          .json({
+            success:
+              false,
+
+            message:
+              "No image provided",
+          });
       }
 
       console.log(
@@ -980,7 +1495,10 @@ router.post(
         "================================="
       );
 
-      // Compress
+      // ==================================================
+      // COMPRESS
+      // ==================================================
+
       const compressed =
         await compressImage(
           req.file.buffer
@@ -1007,20 +1525,31 @@ router.post(
         compressed.quality
       );
 
-      // Unique name
+      // ==================================================
+      // CREATE UNIQUE FILE NAME
+      // ==================================================
+
       const filename =
         createImageName();
 
-      // Upload
+      // ==================================================
+      // GOOGLE DRIVE UPLOAD
+      // ==================================================
+
       const driveFile =
         await uploadImageToGoogleDrive(
           compressed.buffer,
           filename
         );
 
-      // Stable backend image URL
+      // ==================================================
+      // PUBLIC BACKEND IMAGE URL
+      // ==================================================
+
       const baseUrl =
-        getRequestBaseUrl(req);
+        getRequestBaseUrl(
+          req
+        );
 
       const imageUrl =
         `${baseUrl}/api/upload/image/${encodeURIComponent(
@@ -1061,95 +1590,109 @@ router.post(
         "================================="
       );
 
-      return res.status(201).json({
-        success: true,
+      // ==================================================
+      // RESPONSE
+      // ==================================================
 
-        // Save this in MongoDB.
-        // BlogDetails / Blog / Admin can all use it.
-        url: imageUrl,
+      return res
+        .status(201)
+        .json({
+          success:
+            true,
 
-        publicId:
-          driveFile.fileId,
+          // Frontend may use this immediately.
+          url:
+            imageUrl,
 
-        width:
-          compressed.width,
+          // MOST IMPORTANT:
+          // Save this as coverImagePublicId.
+          publicId:
+            driveFile.fileId,
 
-        height:
-          compressed.height,
+          width:
+            compressed.width,
 
-        format: "webp",
+          height:
+            compressed.height,
 
-        size:
-          compressed.size,
+          format:
+            "webp",
 
-        originalSize:
-          compressed.originalSize,
+          size:
+            compressed.size,
 
-        quality:
-          compressed.quality,
+          originalSize:
+            compressed.originalSize,
 
-        filename:
-          driveFile.filename,
+          quality:
+            compressed.quality,
 
-        mimeType:
-          driveFile.mimeType,
+          filename:
+            driveFile.filename,
 
-        // Drive references
-        driveUrl:
-          driveFile.driveUrl,
+          mimeType:
+            driveFile.mimeType,
 
-        webViewLink:
-          driveFile.webViewLink,
+          driveUrl:
+            driveFile.driveUrl,
 
-        webContentLink:
-          driveFile.webContentLink,
+          webViewLink:
+            driveFile.webViewLink,
 
-        downloadUrl:
-          driveFile.downloadUrl,
-      });
+          webContentLink:
+            driveFile.webContentLink,
+
+          downloadUrl:
+            driveFile.downloadUrl,
+        });
     } catch (error) {
-      console.error(
-        "❌ Image Upload Error:",
-        error?.message
-      );
-
       const message =
         error?.message ||
         "Image upload failed";
 
-      const isGoogleAuthError =
-        message.includes(
-          "invalid_grant"
-        ) ||
+      const googleAuthError =
+        isGoogleAuthFailure(
+          error
+        );
+
+      console.error(
+        "❌ Image Upload Error:",
         message
-          .toLowerCase()
-          .includes("expired") ||
-        message
-          .toLowerCase()
-          .includes("revoked");
+      );
 
       return res
         .status(
-          isGoogleAuthError
+          googleAuthError
             ? 503
             : 500
         )
         .json({
-          success: false,
+          success:
+            false,
 
-          code: isGoogleAuthError
-            ? "GOOGLE_DRIVE_AUTH_REQUIRED"
-            : "IMAGE_UPLOAD_FAILED",
+          code:
+            googleAuthError
+              ? "GOOGLE_DRIVE_AUTH_REQUIRED"
+              : "IMAGE_UPLOAD_FAILED",
 
-          message: isGoogleAuthError
-            ? "Google Drive authorization needs to be renewed."
-            : message,
+          message:
+            googleAuthError
+              ? "Google Drive authorization is unavailable."
+              : message,
         });
     }
   }
 );
 
+// ======================================================
 // DELETE IMAGE
+// ======================================================
+//
+// DELETE
+// /api/upload/image/:publicId
+//
+// Admin only.
+// ======================================================
 
 router.delete(
   "/image/:publicId",
@@ -1160,15 +1703,20 @@ router.delete(
   async (req, res) => {
     try {
       const publicId =
-        req.params?.publicId?.trim();
+        req.params
+          ?.publicId
+          ?.trim();
 
       if (!publicId) {
-        return res.status(400).json({
-          success: false,
+        return res
+          .status(400)
+          .json({
+            success:
+              false,
 
-          message:
-            "Google Drive file ID is required",
-        });
+            message:
+              "Google Drive file ID is required",
+          });
       }
 
       if (
@@ -1176,12 +1724,15 @@ router.delete(
           publicId
         )
       ) {
-        return res.status(400).json({
-          success: false,
+        return res
+          .status(400)
+          .json({
+            success:
+              false,
 
-          message:
-            "Invalid Google Drive file ID",
-        });
+            message:
+              "Invalid Google Drive file ID",
+          });
       }
 
       await deleteImageFromGoogleDrive(
@@ -1205,14 +1756,17 @@ router.delete(
         "================================="
       );
 
-      return res.status(200).json({
-        success: true,
+      return res
+        .status(200)
+        .json({
+          success:
+            true,
 
-        message:
-          "Image deleted successfully",
+          message:
+            "Image deleted successfully",
 
-        publicId,
-      });
+          publicId,
+        });
     } catch (error) {
       console.error(
         "❌ Image Delete Error:",
@@ -1223,35 +1777,36 @@ router.delete(
         error?.message ===
         "Google Drive image was not found";
 
-      const isGoogleAuthError =
-        error?.message?.includes(
-          "invalid_grant"
-        ) ||
-        error?.message
-          ?.toLowerCase()
-          .includes("expired") ||
-        error?.message
-          ?.toLowerCase()
-          .includes("revoked");
+      const googleAuthError =
+        isGoogleAuthFailure(
+          error
+        );
 
-      let statusCode = 500;
+      let statusCode =
+        500;
 
       if (isNotFound) {
         statusCode = 404;
       } else if (
-        isGoogleAuthError
+        googleAuthError
       ) {
         statusCode = 503;
       }
 
       return res
-        .status(statusCode)
+        .status(
+          statusCode
+        )
         .json({
-          success: false,
+          success:
+            false,
 
-          code: isGoogleAuthError
-            ? "GOOGLE_DRIVE_AUTH_REQUIRED"
-            : "IMAGE_DELETE_FAILED",
+          code:
+            googleAuthError
+              ? "GOOGLE_DRIVE_AUTH_REQUIRED"
+              : isNotFound
+                ? "IMAGE_NOT_FOUND"
+                : "IMAGE_DELETE_FAILED",
 
           message:
             error?.message ||
@@ -1261,10 +1816,17 @@ router.delete(
   }
 );
 
+// ======================================================
 // MULTER ERROR HANDLER
+// ======================================================
 
 router.use(
-  (error, req, res, next) => {
+  (
+    error,
+    req,
+    res,
+    next
+  ) => {
     if (
       error instanceof
       multer.MulterError
@@ -1273,21 +1835,27 @@ router.use(
         error.code ===
         "LIMIT_FILE_SIZE"
       ) {
-        return res.status(400).json({
-          success: false,
+        return res
+          .status(400)
+          .json({
+            success:
+              false,
 
-          message:
-            "Image size must be 5 MB or less",
-        });
+            message:
+              "Image size must be 5 MB or less",
+          });
       }
 
-      return res.status(400).json({
-        success: false,
+      return res
+        .status(400)
+        .json({
+          success:
+            false,
 
-        message:
-          error.message ||
-          "Image upload error",
-      });
+          message:
+            error.message ||
+            "Image upload error",
+        });
     }
 
     if (
@@ -1297,16 +1865,23 @@ router.use(
         "Only JPG"
       )
     ) {
-      return res.status(400).json({
-        success: false,
+      return res
+        .status(400)
+        .json({
+          success:
+            false,
 
-        message:
-          error.message,
-      });
+          message:
+            error.message,
+        });
     }
 
     return next(error);
   }
 );
+
+// ======================================================
+// EXPORT
+// ======================================================
 
 export default router;
