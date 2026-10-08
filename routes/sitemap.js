@@ -36,8 +36,8 @@ const mainPages = [
   "/our-process",
   "/technologies",
   "/resources",
-  "/development-guides",
-  "/faq",
+  "/guides",
+  "/faqs",
 ];
 
 // SERVICES
@@ -170,7 +170,7 @@ const generateSitemap = async (req, res) => {
         }
 
         // Development guides
-        if (path === "/development-guides") {
+        if (path === "/guides") {
           return generateStaticUrl(
             path,
             "weekly",
@@ -179,7 +179,7 @@ const generateSitemap = async (req, res) => {
         }
 
         // FAQ
-        if (path === "/faq") {
+        if (path === "/faqs") {
           return generateStaticUrl(
             path,
             "monthly",
