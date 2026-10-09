@@ -187,7 +187,7 @@ const generateSitemap = async (req, res) => {
           );
         }
 
-        // Remaining main/company pages
+        //  Remaining main/company pages
         return generateStaticUrl(
           path,
           "monthly",
@@ -211,7 +211,7 @@ const generateSitemap = async (req, res) => {
       .join("\n");
 
     // ==================================================
-    // SOLUTION PAGES
+    // SOLUTION PAGESs
     // ==================================================
 
     const solutionUrls = solutionPages
